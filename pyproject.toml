@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atar"
+version = "0.1.0"
+description = "Adaptive Tool-use Agent with Reinforcement Learning"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.1.0,<2.12.0",
+    "transformers>=4.38.0,<5.17.0",
+    "accelerate>=0.27.0,<1.15.0",
+    "bitsandbytes>=0.42.0,<0.51.0",
+    "gymnasium>=0.29.0,<1.4.0",
+    "outlines>=0.0.34,<1.4.0",
+    "pydantic>=2.0.0,<3.0.0",
+    "pydantic-settings>=2.0.0,<3.0.0",
+    "Jinja2>=3.1.0,<4.0.0",
+    "rank-bm25>=0.2.0,<0.3.0",
+    "wandb>=0.16.0,<0.30.0",
+    "streamlit>=1.30.0,<2.0.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0,<9.1.0",
+    "pytest-cov>=4.1.0,<8.0.0",
+    "ruff>=0.2.0,<0.9.0",
+    "black>=24.0.0,<25.0.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["atar*", "slice*"]
+
+[tool.pyright]
+include = ["."]
+extraPaths = ["."]
+
+[tool.pytest.ini_options]
+pythonpath = [
+  "."
+]
+
+[tool.ruff]
+line-length = 88
+
+[tool.black]
+line-length = 88

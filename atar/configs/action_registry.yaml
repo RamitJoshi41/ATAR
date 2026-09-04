@@ -1,0 +1,32 @@
+# M0 Skeleton: Action Registry
+# All 7 actions listed with empty fields. M4 (Action Translator) will fill in the actual content.
+
+actions:
+  0:
+    name: "ANSWER_DIRECTLY"
+    description: ""
+    parameters: {}
+  1:
+    name: "SEARCH_WEB"
+    description: ""
+    parameters: {}
+  2:
+    name: "CALCULATOR"
+    description: ""
+    parameters: {}
+  3:
+    name: "READ_FILE"
+    description: ""
+    parameters: {}
+  4:
+    name: "WRITE_FILE"
+    description: ""
+    parameters: {}
+  5:
+    name: "RUN_COMMAND"
+    description: ""
+    parameters: {}
+  6:
+    name: "TERMINATE"
+    description: ""
+    parameters: {}
