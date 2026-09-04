@@ -51,6 +51,26 @@ bare float, matching interfaces.md's M5 signature.
 
 ---
 
+### M1 Tool Sandbox
+**What:** Implemented `execute_tool` entry point wrapping 5 sandboxed simulated tools (`search_web`, `calculator`, `sql_query`, `python_exec`, `clarify`). Enforced robust security (e.g. failing closed with restricted AST parsing, avoiding `eval()`, preventing dangerous imports/calls in `python_exec`, checking regex whitelist for `sql_query`).
+
+**Why this approach:** Ensuring tools run deterministically and safely is a critical foundational requirement. AST validation protects `calculator` and `python_exec`, with subprocess isolation for Python exec guaranteeing timeout boundaries. Search uses `rank-bm25` on a small in-memory Wikipedia corpus, with 20% random noise injection to simulate imperfect tool reliability for the RL agent.
+
+**What actually happened when run:** `pytest atar/tests/tools/ -v` passed perfectly (16/16). Noise injection correctly returns non-top documents ~20% of the time, and all security rejection tests trigger successfully for restricted inputs.
+
+**Deviations from the MSD/spec, if any:** None, explicitly handled `__import__` and similar dynamic evaluation calls using `ast.Call` validation in `python_exec` as requested by the architect.
+
+---
+
+### M2 Task Generator
+**What:** Implemented `generate_tasks` and `generate_dataset` to produce 1000 synthetic tasks across 5 difficulty tiers (20% T1, 15% T2, 20% T3, 15% T4, 10% T5). Used Jinja2 templates and programmatic ground truth computation by hooking into M1's `execute_tool` (with a new `deterministic=True` flag to bypass web search noise). Outputs are serialized to JSONL files in `data/`.
+
+**Why this approach:** Using M1 to compute the ground truth during generation guarantees absolute correctness, even as randomized inputs are fed into the Jinja2 templates. To prevent test-set leakage, generated a 6-character random ticket ID for every query to ensure that exact string matches never collide.
+
+**What actually happened when run:** `pytest atar/tests/tasks/ -v` passes (3/3). Tested against overlap and distribution invariants. The updated `execute_tool` in M1 runs deterministically.
+
+**Deviations from the MSD/spec, if any:** Adjusted `interfaces.md` and M1's `execute_tool` to include `deterministic: bool = False`, ensuring the Task Generator gets reliable answers while M1 preserves its original stochastic behavior for the RL agent. Tier 2 Distractors redesigned to ask direct general knowledge questions matching Tier 1 formatting.
+
 ## Results
 <!-- Filled in only after the real evaluation run (Day 22-24). Table of
 accuracy / avg tool calls / recovery rate for ATAR vs Random vs ReAct vs

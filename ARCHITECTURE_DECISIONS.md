@@ -55,3 +55,9 @@ dict — compatible with standard Gymnasium wrappers but loses type safety.
 **Consequence:** PPO rollout buffer (M7) will need to store the full
 dataclass or convert to float for the value loss. Worth it for
 debuggability.
+## ADR-4: Deterministic override in M1 execute_tool
+**Date:** 2026-09-04
+**Decision:** Added an optional `deterministic: bool = False` flag to M1's `execute_tool` signature (and internally to `_search_web`).
+**Context:** M2 Task Generator must compute ground truth programmatically via M1. However, M1's `_search_web` injects noise 20% of the time. We needed a way for M2 to get reliable, noise-free truth without stripping the stochastic behavior required for RL agent training.
+**Alternatives considered:** 1) Re-running the tool in a loop until it succeeded (brittle). 2) Globally patching Python's `random` module during task generation (dangerous side-effects, test leakage).
+**Consequence:** A minor change to `interfaces.md` that safely isolates task generation requirements from RL training requirements.
