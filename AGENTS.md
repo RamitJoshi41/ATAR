@@ -27,6 +27,16 @@ small trainable RL policy (PPO) decides which of 7 discrete actions to take
    tests and they pass.** Show the real test output (pass/fail counts) in
    your summary, not a description of what the tests are supposed to check.
 
+4a. **Always run pytest via the project venv, never system Python.**
+    Use `venv/bin/python3 -m pytest ...` (or equivalently
+    `venv/bin/pytest ...`) from the repo root — never bare `pytest` or
+    `/usr/bin/python3 -m pytest`, which resolve to system-site packages
+    and bypass the isolated environment entirely. If `venv/` does not
+    yet exist or is missing packages, run
+    `python3 -m venv venv && venv/bin/pip install -e .[dev]` first.
+    This is non-negotiable: a test run against system Python is not a
+    valid DoD verification.
+
 5. **No claimed results without a run to back them.** Never write "achieves
    91% accuracy" or similar performance claims in code comments, docstrings,
    or your summary unless you have actually executed the relevant evaluation

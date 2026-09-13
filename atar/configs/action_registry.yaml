@@ -1,32 +1,238 @@
-# M0 Skeleton: Action Registry
-# All 7 actions listed with empty fields. M4 (Action Translator) will fill in the actual content.
+# M4 Action Registry — Populated by M4 (Action Translator).
+# One entry per ActionType (matches IntEnum in shared_types.py).
+# Loaded at import time by atar.translator.action_translator.
+# DO NOT change the top-level keys (0-6); they are indexed by ActionType int value.
 
 actions:
+  # ---- 0: ANSWER_DIRECTLY ------------------------------------------------
   0:
-    name: "ANSWER_DIRECTLY"
-    description: ""
-    parameters: {}
+    name: ANSWER_DIRECTLY
+    system_suffix: |
+      You have decided to answer this question directly from your internal knowledge,
+      without calling any tool. Provide a concise, factual answer.
+      Respond ONLY with valid JSON matching the schema.
+    output_schema:
+      type: object
+      properties:
+        answer:
+          type: string
+          description: "The direct answer to the question."
+        confidence:
+          type: string
+          enum: ["high", "medium", "low"]
+          description: "Self-assessed confidence in the answer."
+      required:
+        - answer
+        - confidence
+      additionalProperties: false
+    few_shot_examples:
+      - |
+        User: What is the capital of France?
+        Assistant: {"answer": "Paris", "confidence": "high"}
+      - |
+        User: What is the boiling point of water in Celsius?
+        Assistant: {"answer": "100 degrees Celsius at standard atmospheric pressure.", "confidence": "high"}
+    constraint_rules:
+      - "answer must be a non-empty string"
+      - "confidence must be one of: high, medium, low"
+    forbidden_patterns: []
+
+  # ---- 1: SEARCH_WEB -------------------------------------------------------
   1:
-    name: "SEARCH_WEB"
-    description: ""
-    parameters: {}
+    name: SEARCH_WEB
+    system_suffix: |
+      You have decided to search for information. Produce a concise search query
+      that will retrieve the most relevant document.
+      Respond ONLY with valid JSON matching the schema.
+    output_schema:
+      type: object
+      properties:
+        query:
+          type: string
+          description: "The search query string (max 200 characters)."
+      required:
+        - query
+      additionalProperties: false
+    few_shot_examples:
+      - |
+        User: Who invented the telephone?
+        Assistant: {"query": "invention of the telephone history"}
+      - |
+        User: What causes the northern lights?
+        Assistant: {"query": "aurora borealis cause explanation"}
+    constraint_rules:
+      - "query must be a non-empty string"
+      - "query must be at most 200 characters"
+    forbidden_patterns:
+      - '(?i)(drop\s+table|delete\s+from|insert\s+into)'  # prevent SQL injection in search
+
+  # ---- 2: CALCULATOR -------------------------------------------------------
   2:
-    name: "CALCULATOR"
-    description: ""
-    parameters: {}
+    name: CALCULATOR
+    system_suffix: |
+      You have decided to use the calculator. Produce a pure arithmetic expression
+      using only numbers and the operators +, -, *, /, ** (no function calls,
+      no variable names, no assignment).
+      Respond ONLY with valid JSON matching the schema.
+    output_schema:
+      type: object
+      properties:
+        expression:
+          type: string
+          description: "A pure arithmetic expression, e.g. '(3 + 4) * 2 / 7'"
+      required:
+        - expression
+      additionalProperties: false
+    few_shot_examples:
+      - |
+        User: What is 15% of 240?
+        Assistant: {"expression": "240 * 0.15"}
+      - |
+        User: What is the area of a circle with radius 5?
+        Assistant: {"expression": "3.14159265 * 5 ** 2"}
+    constraint_rules:
+      - "expression must be a non-empty, non-whitespace-only string"
+      - "expression must parse as a valid arithmetic AST (no function calls, no variables)"
+    forbidden_patterns:
+      - '(?i)(import|exec|eval|open|__)'  # no Python builtins in expression
+      - '[a-zA-Z_][a-zA-Z0-9_]*\s*\('     # no function calls
+
+  # ---- 3: SQL_QUERY --------------------------------------------------------
   3:
-    name: "READ_FILE"
-    description: ""
-    parameters: {}
+    name: SQL_QUERY
+    system_suffix: |
+      You have decided to query the database. Write a single, read-only SELECT
+      statement against one of the available tables:
+        employees(id, name, department_id, salary)
+        departments(id, name)
+        projects(id, name, budget)
+        employee_projects(employee_id, project_id)
+        locations(id, city)
+      Respond ONLY with valid JSON matching the schema.
+    output_schema:
+      type: object
+      properties:
+        query:
+          type: string
+          description: "A single SELECT SQL statement. No DDL, DML, or multiple statements."
+      required:
+        - query
+      additionalProperties: false
+    few_shot_examples:
+      - |
+        User: List all employees in the Engineering department.
+        Assistant: {"query": "SELECT e.name FROM employees e JOIN departments d ON e.department_id = d.id WHERE d.name = 'Engineering'"}
+      - |
+        User: What is the total salary budget?
+        Assistant: {"query": "SELECT SUM(salary) AS total_salary FROM employees"}
+      - |
+        User: Which projects have a budget over 300000?
+        Assistant: {"query": "SELECT name, budget FROM projects WHERE budget > 300000"}
+    constraint_rules:
+      - "query must start with SELECT (case-insensitive)"
+      - "query must not contain DROP, DELETE, INSERT, UPDATE, ATTACH, PRAGMA"
+      - "query must be a single statement (no semicolon-separated batches)"
+      - "query must not contain comment sequences -- or /*"
+    forbidden_patterns:
+      - '(?i)\b(DROP|DELETE|INSERT|UPDATE|ATTACH|PRAGMA|CREATE|ALTER|GRANT|REVOKE)\b'
+      - '--'        # SQL line comment
+      - '/\*'      # SQL block comment
+      - ';\s*\S'   # multiple statements
+
+  # ---- 4: PYTHON_EXEC ------------------------------------------------------
   4:
-    name: "WRITE_FILE"
-    description: ""
-    parameters: {}
+    name: PYTHON_EXEC
+    system_suffix: |
+      You have decided to execute Python code. Write a short, self-contained
+      Python snippet. You may only import from: math, statistics, json, re, collections.
+      You may NOT use: __import__, eval, exec, compile, open, or any other import.
+      The snippet must print its result to stdout (the executor captures stdout).
+      Respond ONLY with valid JSON matching the schema.
+    output_schema:
+      type: object
+      properties:
+        code:
+          type: string
+          description: "A self-contained Python snippet that prints its result to stdout."
+      required:
+        - code
+      additionalProperties: false
+    few_shot_examples:
+      - |
+        User: Compute the mean of [4, 8, 15, 16, 23, 42].
+        Assistant: {"code": "import statistics\nprint(statistics.mean([4, 8, 15, 16, 23, 42]))"}
+      - |
+        User: Count vowels in 'reinforcement learning'.
+        Assistant: {"code": "import re\nprint(len(re.findall(r'[aeiou]', 'reinforcement learning')))"}
+    constraint_rules:
+      - "code must be a non-empty string"
+      - "code must not import modules outside the allow-list: math, statistics, json, re, collections"
+      - "code must not call __import__, eval, exec, compile, or open"
+    forbidden_patterns:
+      - '(?m)^.*\bimport\s+(os|sys|subprocess|socket|shutil|pathlib|importlib|builtins|ctypes|pickle)\b'
+      - '(?m)\b(__import__|eval|exec|compile)\s*\('
+      - '(?m)\bopen\s*\('
+
+  # ---- 5: CLARIFY ----------------------------------------------------------
   5:
-    name: "RUN_COMMAND"
-    description: ""
-    parameters: {}
+    name: CLARIFY
+    system_suffix: |
+      You have decided to ask the user a clarifying question before proceeding.
+      Formulate a single, specific question that will resolve the ambiguity.
+      Respond ONLY with valid JSON matching the schema.
+    output_schema:
+      type: object
+      properties:
+        question:
+          type: string
+          description: "A single, specific clarifying question for the user."
+        clarification_answer:
+          type: string
+          description: "Leave empty string; the environment will fill this in."
+      required:
+        - question
+        - clarification_answer
+      additionalProperties: false
+    few_shot_examples:
+      - |
+        User: Find the average.
+        Assistant: {"question": "What data set would you like me to compute the average of?", "clarification_answer": ""}
+      - |
+        User: Look it up.
+        Assistant: {"question": "What specific topic or term would you like me to look up?", "clarification_answer": ""}
+    constraint_rules:
+      - "question must be a non-empty string"
+      - "clarification_answer may be empty (the environment injects the real answer)"
+    forbidden_patterns: []
+
+  # ---- 6: TERMINATE --------------------------------------------------------
   6:
-    name: "TERMINATE"
-    description: ""
-    parameters: {}
+    name: TERMINATE
+    system_suffix: |
+      You have decided to terminate the episode and return your current best answer
+      as the final response. Summarise the answer concisely.
+      Respond ONLY with valid JSON matching the schema.
+    output_schema:
+      type: object
+      properties:
+        final_answer:
+          type: string
+          description: "The final answer to be returned as the episode result."
+        reasoning:
+          type: string
+          description: "One-sentence justification for terminating now."
+      required:
+        - final_answer
+        - reasoning
+      additionalProperties: false
+    few_shot_examples:
+      - |
+        User: (after calculator returned 42.0)
+        Assistant: {"final_answer": "42.0", "reasoning": "The calculator returned an unambiguous numeric result."}
+      - |
+        User: (after search returned a direct fact)
+        Assistant: {"final_answer": "The capital of France is Paris.", "reasoning": "The search result directly answered the question."}
+    constraint_rules:
+      - "final_answer must be a non-empty string"
+      - "reasoning must be a non-empty string"
+    forbidden_patterns: []

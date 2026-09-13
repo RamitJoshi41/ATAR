@@ -43,6 +43,9 @@ extraPaths = ["."]
 pythonpath = [
   "."
 ]
+markers = [
+  "slow: marks tests as slow (run with -m slow)",
+]
 
 [tool.ruff]
 line-length = 88

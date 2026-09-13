@@ -121,7 +121,12 @@ def _sql_query(params: dict) -> ToolResult:
 
 
 # --- Python Exec definitions ---
-_ALLOWED_IMPORTS = {"math", "statistics", "json", "re", "collections"}
+# Public constant — imported by M4 (Action Translator) so both modules share
+# the same allow-list from a single source.  Never hardcode this in M4.
+PYTHON_ALLOWED_IMPORTS: frozenset[str] = frozenset(
+    {"math", "statistics", "json", "re", "collections"}
+)
+_ALLOWED_IMPORTS = PYTHON_ALLOWED_IMPORTS  # internal alias kept for backward compat
 _FORBIDDEN_CALLS = {"__import__", "eval", "exec", "compile", "open"}
 
 class PythonSecurityVisitor(ast.NodeVisitor):

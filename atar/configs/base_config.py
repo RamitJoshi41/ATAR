@@ -19,6 +19,7 @@ class AtarConfig(BaseSettings):
     data_dir: str = Field(description="Base directory for data")
     
     # Optional parameters with defaults
+    llm_model_name: str = Field(default="Qwen/Qwen2.5-0.5B-Instruct", description="Name or path of the LLM model to use")
     model_dir: str = Field(default="models", description="Base directory for model checkpoints")
     random_seed: int = Field(default=42, description="Global random seed")
     device: str = Field(default="cpu", description="Compute device (e.g., 'cpu', 'cuda')")
