@@ -16,25 +16,29 @@ from atar.policy.policy_network import ATARPolicy
 
 
 def compute_ppo_loss(rollout_batch, policy, clip_range, value_coef, entropy_coef):
-    logits, values = policy(rollout_batch.states)
-    dist = torch.distributions.Categorical(logits=logits)
-    new_log_probs = dist.log_prob(rollout_batch.actions)
+    device = next(policy.parameters()).device
+    states = rollout_batch.states.to(device)
+    actions = rollout_batch.actions.to(device)
+    old_log_probs = rollout_batch.log_probs.to(device)   # <-- field is log_probs, not old_log_probs
+    advantages = rollout_batch.advantages.to(device)
+    returns = rollout_batch.returns.to(device)
 
-    ratio = torch.exp(new_log_probs - rollout_batch.log_probs)
-    advantages = rollout_batch.advantages
-    # normalize advantages — do this, it stabilizes training significantly
+    logits, values = policy(states)
+    dist = torch.distributions.Categorical(logits=logits)
+    new_log_probs = dist.log_prob(actions)
+
+    ratio = torch.exp(new_log_probs - old_log_probs)
     advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
     surr1 = ratio * advantages
     surr2 = torch.clamp(ratio, 1 - clip_range, 1 + clip_range) * advantages
     policy_loss = -torch.min(surr1, surr2).mean()
 
-    value_loss = ((values.squeeze(-1) - rollout_batch.returns) ** 2).mean()
+    value_loss = ((values.squeeze(-1) - returns) ** 2).mean()
     entropy = dist.entropy().mean()
 
     total_loss = policy_loss + value_coef * value_loss - entropy_coef * entropy
     return PPOLossOutput(policy_loss, value_loss, entropy, total_loss)
-
 def compute_gae(rewards: list[float], values: list[float], dones: list[bool],
                  gamma: float, lam: float) -> list[float]:
     advantages = [0.0] * len(rewards)

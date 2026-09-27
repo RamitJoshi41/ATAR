@@ -11,6 +11,20 @@ import pytest
 from atar.policy.ppo_stubs import compute_gae, compute_ppo_loss
 from atar.policy.types import RolloutBatch, PPOLossOutput
 
+import torch.nn as nn
+
+class FakePolicy(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.dummy = nn.Linear(1, 1)  # gives it real parameters to report a device
+
+    def forward(self, states):
+        batch_size = states.shape[0]
+        logits = torch.zeros(batch_size, 7)
+        values = torch.zeros(batch_size, 1)
+        return logits, values
+
+policy = FakePolicy()
 
 def test_compute_gae_matches_hand_calculation():
     """
@@ -78,12 +92,7 @@ def test_compute_ppo_loss_ratio_one_reduces_to_negative_mean_advantage():
 
     # Fake a policy whose forward() we control directly rather than a real
     # ATARPolicy — we only need it to return known logits/values.
-    class FakePolicy:
-        def __call__(self, states):
-            batch_size = states.shape[0]
-            logits = torch.zeros(batch_size, 7)  # uniform logits -> known log_probs
-            values = torch.zeros(batch_size, 1)
-            return logits, values
+ 
 
     policy = FakePolicy()
 
