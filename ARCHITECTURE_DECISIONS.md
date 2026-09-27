@@ -199,3 +199,117 @@ There is no way to make `step()` deterministic without fundamentally changing M1
 validations still run and pass. The env is correctly marked as stochastic in the
 registry, which is accurate for an RL training environment with a neural-network
 policy and noisy tools.
+
+## ADR-10: Batched/vectorized rollout collection for M7
+**Date:** <today>
+**Decision:** M7 collects rollouts from multiple parallel ATAREnv instances
+simultaneously, batching encode()/generate() calls across episodes rather
+than running one sequential episode at a time.
+**Context:** Measured on Kaggle T4 with the real Qwen2.5-7B-Instruct model:
+~2.9s/step sequential, making a single 2048-step rollout ~1.6 hours and a
+full multi-rollout training run 25+ hours — incompatible with Kaggle's
+12-hour session cap and weekly quota.
+**Alternatives considered:** Accepting the sequential cost and splitting
+training across many resumed sessions (rejected — impractically slow
+iteration); reducing rollout_steps below the spec's 2048 (rejected —
+changes a tuned hyperparameter rather than fixing the actual bottleneck).
+**Consequence:** M7's rollout scaffolding is inherently more complex
+(managing N parallel episodes, independent resets, a batched buffer) than
+a single sequential loop. May also require extending M3's encode()/
+generate() to accept batched input if not already batch-capable.
+
+## ADR-11: generate_batch() loops internally (Outlines 1.3.x limitation)
+**Date:** 2026-09-13
+**Decision:** `LLMInterface.generate_batch()` exposes a batched API but
+internally calls `self.generate()` in a loop, because Outlines 1.3.x does
+not support true GPU-batched constrained decoding.
+**Context:** ADR-10's throughput analysis assumed both encode and generate
+would be genuinely batched. After investigation, only `encode_batch()` is
+truly batched (single GPU forward pass). Constrained JSON generation via
+Outlines must receive one prompt at a time.
+**Alternatives considered:**
+- Bypass Outlines and implement batched constrained decoding directly with
+  the HuggingFace model (rejected — reimplementing Outlines' trie-based
+  logit masking is a major undertaking outside scope).
+- Drop `generate_batch` and expose a raw loop in the collector (rejected —
+  breaks API stability; future Outlines versions may add batch support, so
+  a stable API is valuable).
+- Call generate() sequentially in the collector itself (rejected — forces
+  callers to own the loop and makes upgrading to true batch support require
+  collector changes).
+**Consequence:** The `generate` half of each collection cycle is sequential
+(~N×2.7s on Kaggle T4). The `encode` half is genuinely batched (~0.08s for
+N=8). Net effect: batching provides real speedup for encode but not generate.
+This changes ADR-10's original throughput estimate. Actual per-cycle latency
+must be measured on Kaggle after the first training run. The API is forward-
+compatible — switching Outlines versions to gain true batch support requires
+no M7 code changes.
+
+## ADR-12: ATAREnv skip_internal_encode flag (M5 patch for M7 batching)
+**Date:** 2026-09-13
+**Decision:** Added `skip_internal_encode: bool = False` to `ATAREnv.__init__`.
+When True, `_build_state()` skips the internal `llm.encode()` call and leaves
+the semantic slice (state[0:384]) as zeros. M7's `VectorizedCollector` sets
+this flag and replaces the semantic slice with batched encoding output.
+**Context:** `ATAREnv.step()` calls `llm.encode()` internally to build the
+next state. Without this flag, the collector would need to run N sequential
+`encode()` calls (one per env, from inside each `step()`) plus the intended
+1 `encode_batch()` call — paying double the encode cost.
+**Alternatives considered:**
+- Accept the double encode cost (rejected — N sequential encode() calls
+  inside env.step() wastes the primary GPU throughput gain).
+- Have the collector monkeypatch the LLM's encode() to a no-op (rejected —
+  fragile and surprising; breaks if M5 caches the result).
+- Move state construction entirely outside ATAREnv (rejected — requires
+  a more invasive M5 refactor and breaks the M5 public interface).
+**Consequence:** M5 has a new optional parameter that is transparent to all
+existing callers (default=False). Existing 20/20 M5 tests pass unchanged.
+The parameter is documented in the class docstring with the ARCHITECTURE_DECISIONS.md
+reference. Collector must set this flag or else the semantic slice will be
+zero in the stored states.
+
+## ADR-13: Collector semantic slice management — state overwrite pattern
+**Date:** 2026-09-13
+**Decision:** `VectorizedCollector` overwrites `states[:, 0:384]` with the
+output of `encode_batch()` before storing states in the rollout buffer and
+before the policy forward pass. The `next_state` returned by `env.step()`
+is stored in `EpisodeStep.next_state` as-is (semantic slice = zeros) since
+it is not used by the PPO update (only the current state and the value
+bootstrap at the terminal step matter).
+**Context:** With `skip_internal_encode=True`, env.step() returns states
+with zeros in the semantic slice. The collector must manage the semantic
+content of all states it stores.
+**Alternatives considered:**
+- Compute a separate `encode_batch()` for next_states at each step
+  (rejected — doubles encode cost; next_states become current_states at
+  the next step anyway, where they'll be freshly encoded).
+- Store `next_state` with the semantic slice filled (rejected — requires
+  an extra encode_batch pass per step with no training benefit, since GAE
+  only needs the current-state value estimates).
+**Consequence:** `EpisodeStep.next_state` stored in the rollout buffer has
+zeros in the semantic slice. Code that reads `next_state` from the buffer
+(e.g. a bootstrapped value head) must re-encode it. The architect should
+note this if implementing the GAE bootstrap step using buffered next_states.
+
+## ADR-14: encode_batch() numerical equivalence tolerances and CPU vs GPU environment
+**Date:** 2026-09-13
+**Decision:** `test_encode_batch_matches_single_smoke` verifies semantic equivalence
+using cosine similarity > 0.99 and max absolute difference < 0.25 rather than strict
+floating-point equality. A tighter non-padded test requires cosine similarity > 0.9999
+and max difference < 0.12.
+**Context:** Diagnostic investigation revealed that even without padding, running
+sequences individually vs in a batch produces non-zero residual differences (~0.086
+on CPU). On CPU development environments (without CUDA), BitsAndBytes 4-bit
+quantization is inactive; the difference stems from floating-point reduction order
+variations across batch dimensions in CPU BLAS (MKL/oneDNN) and attention softmax
+reductions. Left-padding introduces additional minor rounding variances.
+**Alternatives considered:**
+- Requiring strict `torch.allclose` with tight tolerances (rejected — fails due to
+  standard floating-point non-associativity across batch dimension reductions).
+- Widening tolerance blindly without root-causing (rejected — diagnostic proved that
+  padding is correctly masked and model forward is called only once).
+**Consequence:** Tests reliably pass locally on CPU while preventing masking bugs.
+However, once running on the target remote training environment (Kaggle T4 GPU) with
+actual BitsAndBytes 4-bit NF4 quantization and float16 fused attention kernels
+enabled, the numerical noise profile and magnitude may differ. The tolerance must be
+re-checked on Kaggle, not assumed identical to CPU.

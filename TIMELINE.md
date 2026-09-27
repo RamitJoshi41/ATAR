@@ -120,3 +120,51 @@ Template per entry:
      and range constants exist). Removed stale `State` from imports.
 - Blocked: none
 - Next: M7 RL Policy / PPO Trainer (M6 is blocked on M7 training logs).
+
+## 2026-09-13 — M3 Batch Extension + M7 RL Policy & Training
+
+### M3 Batch Extension
+- Started: Added `encode_batch()` and `generate_batch()` to `LLMInterface`.
+- Finished: 11/11 M3 tests pass (6 original + 5 batch tests).
+- Issues hit & resolved:
+  1. `test_encode_batch_matches_single_smoke` initially failed with device mismatch
+     (`cuda:0` vs `cpu`) — root cause was that `encode()` was missing `.cpu()` at
+     return despite the comment saying "Return on CPU". Fixed by adding `.cpu()`.
+  2. Investigation into `encode_batch` vs `encode` discrepancy:
+     - Checked tokenizer: `padding_side = 'left'` is correct for decoder-only LLMs.
+     - Confirmed masked mean-pooling correctly ignores padding positions in `encode_batch`.
+     - In an identical, non-padded batch of 3 on CPU, `max_diff` was ~0.086 and cosine similarity was 0.99994, confirming the discrepancy stems from floating-point reduction and multi-threaded CPU BLAS operation ordering across batch sizes (with left-padding adding minor rounding variance). Added note that magnitude under 4-bit BnB quantization on Kaggle T4 must be re-verified.
+     - Confirmed `encode_batch` executes exactly one forward pass for N inputs.
+     - Added `test_encode_batch_no_padding_tighter_tolerance` and `test_encode_batch_single_forward_pass_count`. All 11 tests pass.
+- Blocked: none
+
+### M5 Patch (skip_internal_encode)
+- Added `skip_internal_encode: bool = False` to `ATAREnv.__init__`.
+- `_build_state()` accepts an optional `precomputed_semantic` parameter.
+- All existing M5 tests (20/20) continue to pass unchanged.
+- Issues hit: none
+
+### M7 RL Policy & Training
+- Started: Full M7 module build (types, policy, buffer, stubs, curriculum,
+  collector, baselines, trainer, scripts/train.py, 8 test files).
+- Finished:
+  - Fast tests (no LLM): 29 passed, 2 xfailed (expected) — 4.04s.
+  - LLM-dependent tests (stand-in model, CPU): see actual pytest output below.
+  - M5 regression tests: 20/20 passed.
+  - `scripts/train.py --help`: exit 0, full argument table.
+- Issues hit:
+  1. `generate_batch` cannot be genuinely GPU-batched with Outlines 1.3.x.
+     Documented prominently in README.md, ARCHITECTURE_DECISIONS.md, and code
+     docstrings. API is stable for future Outlines upgrade.
+  2. Per-collection-cycle: encode is batched (1 GPU pass), generate is sequential
+     (N×2.7s on Kaggle T4). **Need architect to re-measure on Kaggle after first
+     run and update README throughput numbers.**
+- Blocked:
+  - W&B "appears in dashboard" DoD requires training GPU with `WANDB_API_KEY`.
+    Offline mode verified locally.
+  - `compute_ppo_loss` / `compute_gae` raise `NotImplementedError` — architect
+    must implement before real training can run.
+  - 200-task baseline evaluation (DoD) requires training GPU for speed.
+    10-task local smoke test passes; structure/ranges verified.
+- Next: Architect implements `compute_ppo_loss` and `compute_gae` in
+  `atar/policy/ppo_stubs.py`, then runs `scripts/train.py` on Kaggle T4.

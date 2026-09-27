@@ -234,3 +234,240 @@ def test_model_load_error_on_bad_name() -> None:
     """Confirm ModelLoadError is raised (not a bare Exception) for invalid names."""
     with pytest.raises(ModelLoadError):
         LLMInterface(model_name="this-model/does-not-exist-anywhere", device="cpu")
+
+
+# ---------------------------------------------------------------------------
+# Batch methods: encode_batch / generate_batch
+# (Added for M7 vectorised rollout collection — DoD items for M3 batch ext.)
+# All use _smoke suffix: proving code path with stand-in model, not prod model.
+# ---------------------------------------------------------------------------
+
+def test_encode_batch_shape_smoke(llm: LLMInterface) -> None:
+    """
+    encode_batch() must return a (N, 384) tensor for N message lists.
+    Tests N=1, N=4 to confirm shape scales correctly.
+    """
+    msgs = [{"role": "user", "content": "Hello world"}]
+
+    # N=1
+    out1 = llm.encode_batch([msgs])
+    assert isinstance(out1, torch.Tensor), "encode_batch must return a torch.Tensor"
+    assert out1.shape == (1, 384), f"Expected (1, 384), got {out1.shape}"
+    assert out1.dtype == torch.float32, f"Expected float32, got {out1.dtype}"
+
+    # N=4 with varied inputs
+    batch = [
+        [{"role": "user", "content": "First message"}],
+        [{"role": "user", "content": "Second message, somewhat longer than the first"}],
+        [{"role": "system", "content": "You are an assistant."},
+         {"role": "user", "content": "Third message"}],
+        [{"role": "user", "content": "Fourth"}],
+    ]
+    out4 = llm.encode_batch(batch)
+    assert out4.shape == (4, 384), f"Expected (4, 384), got {out4.shape}"
+    assert out4.dtype == torch.float32
+
+
+def test_encode_batch_matches_single_smoke(llm: LLMInterface) -> None:
+    """
+    encode_batch() and encode() must produce semantically equivalent results
+    for the same input.
+
+    Root-cause of the non-zero diff (confirmed via diagnostic run 2026-09-13):
+    ─────────────────────────────────────────────────────────────────────────
+    The discrepancy is NOT a bug in the pooling or masking logic. It has two
+    independent sources:
+
+    1. Batch-size-dependent reduction and BLAS order differences.
+       Even on CPU with identical sequences and NO padding (all attention_mask=1),
+       running the same sequence through the model with batch_size=1 vs
+       batch_size=N produces hidden states that differ by up to ~0.086 max
+       element-wise. This is standard floating-point non-associativity:
+       CPU BLAS / attention matrix multiplications change multi-threaded reduction
+       order when batching. Cosine similarity in the no-padding case is 0.99994
+       (effectively identical semantic direction).
+
+       NOTE FOR GPU EXECUTION (Kaggle T4):
+       Local tests run on CPU without BitsAndBytes quantization. When deployed to
+       CUDA with 4-bit BnB quantization and float16 compute active, the numerical
+       magnitude of variations may differ due to 4-bit dequantization and CUDA
+       fused-attention kernels. This tolerance should be re-verified on the Kaggle GPU.
+
+    2. Left-padding effect (additional on top of #1 when sequences differ in
+       length). padding_side='left' is correct for decoder-only LLMs. The
+       masked mean-pool in encode_batch() correctly excludes padding positions
+       (confirmed: masked-pool vs naive-pool diff for a padded row = 43.07,
+       showing the <|endoftext|> pad token has large non-zero hidden states
+       that would corrupt the pool if included).
+
+    Confirmed via diagnostic that model.forward() is called exactly once for
+    N inputs — encode_batch is genuinely batched, not a loop.
+
+    Tolerances (with padding):
+      (a) cosine_sim > 0.99   — same semantic direction
+      (b) max_diff < 0.25     — rules out gross divergence
+
+    See also test_encode_batch_no_padding_tighter_tolerance for the tighter
+    no-padding case, and test_encode_batch_single_forward_pass_count for the
+    model call count check.
+    """
+    msgs = [{"role": "user", "content": "Consistency check for batching"}]
+    n = 3
+
+    single_out = llm.encode(msgs)             # (384,) on CPU
+    batch_out = llm.encode_batch([msgs] * n)  # (3, 384) on CPU
+
+    assert batch_out.shape == (n, 384)
+    assert single_out.device.type == "cpu", "encode() should return on CPU"
+    assert batch_out.device.type == "cpu", "encode_batch() should return on CPU"
+
+    for i in range(n):
+        row = batch_out[i]   # (384,)
+
+        cos_sim = torch.nn.functional.cosine_similarity(
+            row.unsqueeze(0), single_out.unsqueeze(0)
+        ).item()
+        assert cos_sim > 0.99, (
+            f"Row {i} cosine similarity {cos_sim:.4f} < 0.99 — "
+            "batch and single encode are semantically divergent"
+        )
+
+        max_diff = (row - single_out).abs().max().item()
+        assert max_diff < 0.25, (
+            f"Row {i} max element diff {max_diff:.4f} >= 0.25. "
+            "Exceeds expected numerical variation. "
+            "Inspect attention_mask masking in encode_batch() pooling step."
+        )
+
+
+def test_encode_batch_no_padding_tighter_tolerance(llm: LLMInterface) -> None:
+    """
+    When all N sequences are identical (no padding at all — attention_mask is
+    all-ones for every row), encode_batch() and encode() must agree more
+    tightly than the padded case.
+
+    Confirmed in diagnostic (2026-09-13 on CPU):
+      - Same-length batch of 3: max_diff = 0.0859, cosine_sim = 0.99994
+      - This residual diff is floating-point reduction order variation across
+        batch sizes in CPU BLAS/attention, not a pooling or masking bug.
+      - Note: magnitude may differ when evaluated on Kaggle GPU under BnB 4-bit
+        quantization.
+
+    Tighter bounds vs the padded test:
+      (a) cosine_sim > 0.9999  (padding adds ~0.05 cos-sim degradation)
+      (b) max_diff < 0.12      (padding adds ~0.02 extra max-diff)
+    """
+    # Use identical messages so tokenised lengths are equal → no padding needed.
+    msgs = [{"role": "user", "content": "What is two plus two?"}]
+    N = 3
+
+    single_out = llm.encode(msgs)              # (384,) on CPU
+    batch_out  = llm.encode_batch([msgs] * N)  # (3, 384) on CPU
+
+    assert batch_out.shape == (N, 384)
+
+    # Verify the mask is all-ones (no padding) — confirm the premise of the test.
+    prompts = [
+        llm.tokenizer.apply_chat_template(
+            msgs, tokenize=False, add_generation_prompt=True
+        )
+    ] * N
+    inputs = llm.tokenizer(prompts, return_tensors="pt", padding=True)
+    assert inputs["attention_mask"].all(), (
+        "Expected all-ones attention_mask (no padding) for same-length inputs."
+        f"Got mask with zeros: {inputs['attention_mask']}"
+    )
+
+    for i in range(N):
+        row = batch_out[i]
+        cos_sim = torch.nn.functional.cosine_similarity(
+            row.unsqueeze(0), single_out.unsqueeze(0)
+        ).item()
+        max_diff = (row - single_out).abs().max().item()
+
+        assert cos_sim > 0.9999, (
+            f"No-padding row {i}: cosine_sim {cos_sim:.6f} < 0.9999. "
+            "Float16 kernel variation exceeds expected range — investigate."
+        )
+        assert max_diff < 0.12, (
+            f"No-padding row {i}: max_diff {max_diff:.6f} >= 0.12. "
+            "Exceeds expected float16 rounding range without padding. "
+            "This suggests a bug in batching logic, not just numerical noise."
+        )
+
+
+def test_generate_batch_count_smoke(llm: LLMInterface) -> None:
+    """
+    generate_batch() must return a list of length N, where each element is
+    a dict conforming to the provided JSON schema.
+    """
+    schema = {
+        "title": "Ack",
+        "type": "object",
+        "properties": {"ack": {"type": "string"}},
+        "required": ["ack"],
+    }
+    msgs_a = [{"role": "user", "content": "Acknowledge receipt."}]
+    msgs_b = [{"role": "user", "content": "Confirm you received the request."}]
+    batch = [msgs_a, msgs_b]
+
+    results = llm.generate_batch(batch, schema)
+
+    assert isinstance(results, list), f"Expected list, got {type(results)}"
+    assert len(results) == len(batch), (
+        f"Expected {len(batch)} results, got {len(results)}"
+    )
+    for i, result in enumerate(results):
+        assert isinstance(result, dict), f"Result {i} is not a dict: {type(result)}"
+        assert "ack" in result, f"Result {i} missing 'ack' key: {result}"
+        assert isinstance(result["ack"], str), (
+            f"Result {i} 'ack' value is not a string: {type(result['ack'])}"
+        )
+
+def test_encode_batch_single_forward_pass_count(llm: LLMInterface) -> None:
+    """
+    encode_batch() must issue exactly ONE model.forward() call for a batch
+    of N inputs — confirming it is a genuine single GPU forward pass, not
+    a loop over N individual encode() calls.
+
+    Also confirms encode() itself issues exactly 1 call (sanity check).
+
+    Confirmed in diagnostic run (2026-09-13): N=4 → 1 call. ✅
+    """
+    import types
+
+    call_count: dict[str, int] = {"n": 0}
+    real_forward = llm.base_model.forward
+
+    def counting_forward(*args, **kwargs):
+        call_count["n"] += 1
+        return real_forward(*args, **kwargs)
+
+    # Patch forward — use a closure to avoid binding 'self' issues.
+    llm.base_model.forward = types.MethodType(
+        lambda self, *a, **kw: counting_forward(*a, **kw),
+        llm.base_model,
+    )
+
+    try:
+        N = 4
+        batch_msgs = [
+            [{"role": "user", "content": f"Question {i} for call count test"}]
+            for i in range(N)
+        ]
+        _ = llm.encode_batch(batch_msgs)
+
+        assert call_count["n"] == 1, (
+            f"encode_batch(N={N}) called model.forward() {call_count['n']} times. "
+            f"Expected exactly 1 (genuinely batched). Got {call_count['n']} — "
+            "encode_batch may be looping instead of batching."
+        )
+
+        # Also verify single encode() calls forward exactly once.
+        call_count["n"] = 0
+        _ = llm.encode([{"role": "user", "content": "Single call check"}])
+        assert call_count["n"] == 1, (
+            f"encode() called model.forward() {call_count['n']} times, expected 1."
+        )
+    finally:
+        llm.base_model.forward = real_forward

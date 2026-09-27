@@ -183,6 +183,21 @@ class ATAREnv(gymnasium.Env):
         ``<repo_root>/data``.  Must be set if no ATAR_DATA_DIR env var.
     seed : int | None
         RNG seed for reproducible episode sampling.
+    skip_internal_encode : bool
+        When False (default), ``step()`` and ``reset()`` call
+        ``llm.encode()`` internally to fill the semantic slice of the
+        state vector — the standard, self-contained behaviour that all
+        existing code and tests rely on.
+
+        When True, the semantic slice (state[0:384]) is set to zeros by
+        ``_build_state()`` instead.  M7's ``VectorizedCollector`` uses
+        this mode: it collects the raw step outputs, then calls
+        ``llm.encode_batch()`` once across all N environments and writes
+        the resulting vectors into the stored rollout states itself.
+        This avoids N sequential encode() calls inside the env loop
+        and replaces them with a single batched GPU forward pass.
+
+        See ARCHITECTURE_DECISIONS.md for the full rationale.
     """
 
     metadata: dict[str, Any] = {"render_modes": []}
@@ -192,6 +207,7 @@ class ATAREnv(gymnasium.Env):
         llm: LLMInterface | None = None,
         data_dir: str | Path | None = None,
         seed: int | None = None,
+        skip_internal_encode: bool = False,
     ) -> None:
         super().__init__()
 
@@ -218,6 +234,9 @@ class ATAREnv(gymnasium.Env):
         self._tasks: list[Task] = _load_tasks(data_dir)
         if not self._tasks:
             raise RuntimeError(f"No tasks found in {data_dir!s}")
+
+        # M7 batching flag — see class docstring
+        self._skip_internal_encode: bool = skip_internal_encode
 
         # RNG -------------------------------------------------------------
         self._rng = random.Random(seed)
@@ -484,15 +503,36 @@ class ATAREnv(gymnasium.Env):
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _build_state(self) -> np.ndarray:
-        """Assemble the 512-d state vector from current episode context."""
+    def _build_state(
+        self,
+        precomputed_semantic: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """
+        Assemble the 512-d state vector from current episode context.
+
+        Parameters
+        ----------
+        precomputed_semantic : np.ndarray | None
+            If provided, used as the semantic slice (state[0:384]) directly,
+            bypassing the internal ``llm.encode()`` call.  Only supplied by
+            M7's ``VectorizedCollector`` when ``skip_internal_encode=True``.
+            Must be shape (384,), dtype float32.
+        """
         state = np.zeros(STATE_DIM, dtype=np.float32)
 
         # [0:384] — Semantic encoding from M3
-        semantic: torch.Tensor = self._llm.encode(self._messages)
-        semantic_np = semantic.cpu().numpy().astype(np.float32)
-        s, e = SEMANTIC_RANGE
-        state[s:e] = semantic_np[:384]   # guard: encode() returns exactly 384-d
+        if precomputed_semantic is not None:
+            # Caller (M7 VectorizedCollector) supplies pre-batched encoding.
+            state[SEMANTIC_RANGE[0]:SEMANTIC_RANGE[1]] = precomputed_semantic[:384]
+        elif self._skip_internal_encode:
+            # skip_internal_encode=True but no vector provided: leave zeros.
+            # Collector must overwrite this slice before using the state.
+            pass
+        else:
+            semantic: torch.Tensor = self._llm.encode(self._messages)
+            semantic_np = semantic.cpu().numpy().astype(np.float32)
+            s, e = SEMANTIC_RANGE
+            state[s:e] = semantic_np[:384]   # guard: encode() returns exactly 384-d
 
         # [384:391] — Binary tool-history flags
         s, e = TOOL_HISTORY_RANGE

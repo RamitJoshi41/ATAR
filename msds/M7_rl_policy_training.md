@@ -8,7 +8,36 @@ the architect needs to be able to defend every line of the PPO update
 without hesitation.
 
 ## Split of responsibility
-**Agent builds:**
+## Rollout collection architecture (critical — based on measured GPU latency)
+
+Real measurement on a Kaggle T4 with Qwen2.5-7B-Instruct (steady-state,
+warmed up): `encode()` ≈ 0.08s, `generate()` ≈ 2.7s average (range
+1.7-9.1s). At ~2.9s/step, a single sequential 2048-step rollout takes
+~1.6 hours — and a full training run needing many rollouts across 3
+curriculum phases would take dozens of hours sequentially, exceeding both
+Kaggle's 12-hour session cap and its weekly quota in a single run.
+
+**Rollout collection must run multiple environment episodes in parallel
+and batch their `encode()`/`generate()` calls together** — not one
+sequential episode at a time. A 7B model processing one request at a time
+leaves most of a GPU's throughput unused; batching several episodes'
+calls into single forward passes converts idle capacity into real
+parallel progress. Concretely:
+- Maintain N `ATAREnv` instances simultaneously (N=8-16 is a reasonable
+  starting point — agent should make this configurable, not hardcoded).
+- Each PPO collection step advances all N episodes by one step, batching
+  their `encode()` calls into one forward pass and their `generate()`
+  calls into one batched generation call, rather than looping through
+  environments one at a time calling M3 individually.
+- Episodes that terminate/truncate before others reset independently and
+  continue contributing to the shared rollout buffer — episodes need not
+  be synchronized in length.
+- This requires M3's `LLMInterface.encode()`/`generate()` to accept a
+  batch of message-lists, not just one — if the current M3 implementation
+  is single-example only, flag this as a required M3 extension before
+  proceeding, don't work around it by looping.
+
+## Agent builds:
 - Network architecture (exact spec below)
 - Rollout buffer data structure
 - Training loop scaffolding: episode collection loop, checkpointing,

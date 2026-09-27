@@ -1,14 +1,13 @@
 import ast
-import json
 import operator
+import os
 import random
 import re
 import sqlite3
 import subprocess
 import tempfile
 import time
-import os
-from typing import Any
+from typing import Any, Callable
 
 from atar.shared.shared_types import ActionType, ToolResult
 
@@ -29,7 +28,7 @@ _ALLOWED_AST_NODES = {
     ast.UAdd,
 }
 
-_AST_OPERATORS = {
+_AST_OPERATORS: dict[type[ast.AST], Callable[..., Any]] = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
@@ -41,23 +40,26 @@ _AST_OPERATORS = {
 
 def _eval_ast(node: ast.AST) -> float:
     if isinstance(node, ast.Constant):
-        if not isinstance(node.value, (int, float)):
+        if not isinstance(node.value, (int, float)) or isinstance(node.value, bool):
             raise ValueError("Disallowed expression")
         return float(node.value)
     elif isinstance(node, ast.Num):
-        return float(node.n)
+        val = node.n
+        if not isinstance(val, (int, float)) or isinstance(val, bool):
+            raise ValueError("Disallowed expression")
+        return float(val)
     elif isinstance(node, ast.Expression):
         return _eval_ast(node.body)
     elif isinstance(node, ast.UnaryOp):
         if type(node.op) not in _AST_OPERATORS:
             raise ValueError(f"Disallowed operator: {type(node.op).__name__}")
         op = _AST_OPERATORS[type(node.op)]
-        return op(_eval_ast(node.operand))
+        return float(op(_eval_ast(node.operand)))
     elif isinstance(node, ast.BinOp):
         if type(node.op) not in _AST_OPERATORS:
             raise ValueError(f"Disallowed operator: {type(node.op).__name__}")
         op = _AST_OPERATORS[type(node.op)]
-        return op(_eval_ast(node.left), _eval_ast(node.right))
+        return float(op(_eval_ast(node.left), _eval_ast(node.right)))
     else:
         raise ValueError("Disallowed expression")
 

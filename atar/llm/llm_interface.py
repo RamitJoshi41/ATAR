@@ -9,9 +9,16 @@ never hardcoded, so the architect can swap between the 0.5B stand-in (local
 """
 
 import json
+from typing import cast
+
 import torch
 import torch.nn as nn
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    PreTrainedTokenizerBase,
+)
 import outlines
 import outlines.models
 from outlines.models import Transformers
@@ -42,6 +49,8 @@ class LLMInterface:
         (BitsAndBytes requires CUDA).
     """
 
+    tokenizer: PreTrainedTokenizerBase
+
     def __init__(self, model_name: str | None = None, device: str = "cuda") -> None:
         if model_name is None:
             config = load_config()
@@ -70,9 +79,12 @@ class LLMInterface:
                     device_map=self.device,
                 )
 
-            self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-            if self.tokenizer.pad_token is None:
-                self.tokenizer.pad_token = self.tokenizer.eos_token
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            if tokenizer is None:
+                raise ModelLoadError(f"Failed to load tokenizer for '{model_name}'")
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+            self.tokenizer = tokenizer
 
         except Exception as e:
             raise ModelLoadError(f"Failed to load model '{model_name}': {e}") from e
@@ -95,7 +107,7 @@ class LLMInterface:
         # outlines.models.Transformers(model, tokenizer) is the constructor.
         try:
             self.outlines_model: Transformers = outlines.models.Transformers(
-                self.base_model, self.tokenizer
+                self.base_model, self.tokenizer  # type: ignore[arg-type]
             )
         except Exception as e:
             raise ModelLoadError(
@@ -115,8 +127,11 @@ class LLMInterface:
         torch.Tensor
             Shape (384,), dtype float32.
         """
-        prompt: str = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+        prompt: str = cast(
+            str,
+            self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            ),
         )
         inputs = self.tokenizer(prompt, return_tensors="pt").to(
             self.base_model.device
@@ -135,7 +150,7 @@ class LLMInterface:
         projected = self.projection(mean_pooled.to(self.projection.weight.dtype))
 
         # Return (384,) on CPU for downstream consistency
-        return projected.squeeze(0).to(torch.float32).detach()
+        return projected.squeeze(0).to(torch.float32).detach().cpu()
 
     def generate(
         self,
@@ -170,8 +185,11 @@ class LLMInterface:
         GenerationError
             If constrained decoding fails after max_retries attempts.
         """
-        prompt: str = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
+        prompt: str = cast(
+            str,
+            self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            ),
         )
 
         # Build the output type descriptor (outlines 1.3.x).
@@ -210,3 +228,107 @@ class LLMInterface:
             f"Failed to generate constrained JSON after {max_retries} attempts: "
             f"{last_exc}"
         ) from last_exc
+
+    # ------------------------------------------------------------------
+    # Batch public interface (added for M7 vectorised rollout collection)
+    # ------------------------------------------------------------------
+
+    def encode_batch(self, batch_messages: list[list[dict]]) -> torch.Tensor:
+        """
+        Batched encode: one GPU forward pass for N conversations.
+
+        Tokenises all N message lists together, runs a single forward pass
+        through the frozen LLM, mean-pools each sequence's last hidden state
+        (respecting padding via attention_mask), and projects each to 384-d.
+
+        Parameters
+        ----------
+        batch_messages : list[list[dict]]
+            N conversation histories in OpenAI chat format.
+
+        Returns
+        -------
+        torch.Tensor
+            Shape (N, 384), dtype float32, on CPU.
+        """
+        if not batch_messages:
+            return torch.zeros(0, 384, dtype=torch.float32)
+
+        # Apply chat template to each conversation → N prompt strings.
+        prompts: list[str] = [
+            cast(
+                str,
+                self.tokenizer.apply_chat_template(
+                    msgs, tokenize=False, add_generation_prompt=True
+                ),
+            )
+            for msgs in batch_messages
+        ]
+
+        # Batch-tokenise with padding so all sequences share one tensor.
+        inputs = self.tokenizer(
+            prompts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+        ).to(self.base_model.device)
+
+        with torch.no_grad():
+            outputs = self.base_model(**inputs, output_hidden_states=True)
+
+        # last_hidden_state: (N, max_seq_len, hidden_size)
+        last_hidden = outputs.hidden_states[-1]
+
+        # Masked mean pool — divide sum over non-padding positions by real length.
+        # attention_mask: (N, max_seq_len), values 0 or 1.
+        mask = inputs["attention_mask"].unsqueeze(-1).float()  # (N, seq, 1)
+        sum_hidden = (last_hidden * mask).sum(dim=1)           # (N, hidden_size)
+        lengths = mask.sum(dim=1).clamp(min=1e-8)              # (N, 1)
+        mean_pooled = sum_hidden / lengths                     # (N, hidden_size)
+
+        # Project to (N, 384) and return on CPU as float32.
+        projected = self.projection(mean_pooled.to(self.projection.weight.dtype))
+        return projected.to(torch.float32).detach().cpu()
+
+    def generate_batch(
+        self,
+        batch_messages: list[list[dict]],
+        json_schema: dict,
+        max_new_tokens: int = 256,
+    ) -> list[dict]:
+        """
+        Batched constrained JSON generation for N conversations.
+
+        **Implementation note — Outlines 1.3.x limitation:**
+        Outlines 1.3.x does not support true GPU-batched constrained
+        decoding; each call must receive a single prompt.  This method
+        therefore iterates over the N message lists and calls
+        ``self.generate()`` for each one sequentially.  The batched API is
+        preserved so callers (M7's VectorizedCollector) are written against
+        a stable interface that can be upgraded to true batching if a future
+        Outlines version adds that capability — no M7 code changes required.
+
+        This means the *encode* half of each rollout cycle is genuinely
+        batched (single GPU forward pass via encode_batch), while the
+        *generate* half is sequential.  See ARCHITECTURE_DECISIONS.md and
+        README.md M7 section for throughput implications and the plan to
+        re-measure actual per-cycle latency on Kaggle.
+
+        Parameters
+        ----------
+        batch_messages : list[list[dict]]
+            N conversation histories in OpenAI chat format.
+        json_schema : dict
+            JSON Schema dict the output must conform to.
+        max_new_tokens : int
+            Maximum tokens to generate per call (default 256).
+
+        Returns
+        -------
+        list[dict]
+            N parsed JSON dicts, one per input conversation.
+        """
+        return [
+            self.generate(msgs, json_schema, max_new_tokens)
+            for msgs in batch_messages
+        ]
