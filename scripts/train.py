@@ -204,6 +204,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "curriculum phase — training continues as if uninterrupted."
         ),
     )
+    p.add_argument(
+        "--stop-after-updates",
+        type=int,
+        default=None,
+        help="Checkpoint and exit cleanly after N updates in this invocation.",
+    )
 
     # ── Weights & Biases ──────────────────────────────────────────────────
     p.add_argument(
@@ -314,6 +320,7 @@ def main() -> int:
         seed=args.seed,
         no_curriculum=args.no_curriculum,
         freeze_projection=args.freeze_projection,
+        stop_after_updates=args.stop_after_updates,
     )
 
     # ── Resume from checkpoint if requested ───────────────────────────────

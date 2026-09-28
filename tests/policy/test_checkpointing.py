@@ -216,3 +216,60 @@ def test_wandb_offline_run_created(
     assert trainer._run.summary.get("test_key") == "verified"
 
     trainer._run.finish()
+
+
+def test_stop_after_updates_and_resume(
+    llm: LLMInterface, data_dir: Path, tmp_path: Path
+) -> None:
+    """
+    DoD: test --stop-after-updates 1.
+    Run a trainer with stop_after_updates=1. Confirm exactly one update ran,
+    a checkpoint exists, and resuming from it continues the step count.
+    """
+    policy = ATARPolicy()
+    ckpt_dir = tmp_path / "ckpts_stop"
+    
+    trainer1 = PPOTrainer(
+        policy=policy,
+        llm=llm,
+        data_dir=str(data_dir),
+        n_envs=2,
+        rollout_steps=5,
+        total_steps=50,
+        checkpoint_dir=str(ckpt_dir),
+        wandb_mode="offline",
+        stop_after_updates=1,
+    )
+    
+    trainer1.train()
+    
+    assert trainer1._updates_this_invocation == 1, "Should have stopped after exactly 1 update"
+    
+    # After 1 update (with rollout_steps=5), global_step should be 5
+    expected_step_after_1_update = 5
+    assert trainer1._global_step == expected_step_after_1_update
+    
+    ckpt_path = ckpt_dir / f"checkpoint_step_{expected_step_after_1_update}.pt"
+    assert ckpt_path.exists(), f"Checkpoint {ckpt_path} was not created"
+    
+    # Now resume
+    policy2 = ATARPolicy()
+    trainer2 = PPOTrainer(
+        policy=policy2,
+        llm=llm,
+        data_dir=str(data_dir),
+        n_envs=2,
+        rollout_steps=5,
+        total_steps=50,
+        checkpoint_dir=str(ckpt_dir),
+        wandb_mode="offline",
+        stop_after_updates=1,
+    )
+    trainer2.restore_from_checkpoint(ckpt_path)
+    assert trainer2._global_step == expected_step_after_1_update, "Step count should continue"
+    
+    # Train again, should do 1 more update and stop
+    trainer2.train()
+    assert trainer2._updates_this_invocation == 1, "Second invocation should stop after 1 update"
+    expected_step_after_2_updates = 10
+    assert trainer2._global_step == expected_step_after_2_updates, "Step count should continue instead of restarting"

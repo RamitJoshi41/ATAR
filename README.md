@@ -301,7 +301,7 @@ A dedicated root-cause diagnostic confirmed:
 - **`RandomBaseline` / `ReActBaseline`** — both run episodes and return
   `{accuracy, avg_episode_length, tool_call_rate}` dicts for comparison.
 - **`scripts/train.py`** — standalone CLI with argparse, all hyperparameters as
-  flags with MSD defaults, `--resume-from` support, ablation flags
+  flags with MSD defaults, `--resume-from` and `--stop-after-updates` support, ablation flags
   (`--no-curriculum`, `--freeze-projection`), deferred imports for fast `--help`.
 
 **Why this approach:**

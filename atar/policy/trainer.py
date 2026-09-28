@@ -94,6 +94,8 @@ class PPOTrainer:
         Ablation: skip curriculum, train on all tiers from step 0.
     freeze_projection : bool
         Ablation: freeze M3's projection layer (don't co-train with policy).
+    stop_after_updates : int | None
+        Stop training cleanly after this many updates in this invocation.
     """
 
     def __init__(
@@ -123,6 +125,7 @@ class PPOTrainer:
         seed: int | None = None,
         no_curriculum: bool = False,
         freeze_projection: bool = False,
+        stop_after_updates: int | None = None,
     ) -> None:
         self._policy = policy.to(device)
         self._llm = llm
@@ -143,6 +146,7 @@ class PPOTrainer:
         self._checkpoint_interval = checkpoint_interval
         self._no_curriculum = no_curriculum
         self._freeze_projection = freeze_projection
+        self._stop_after_updates = stop_after_updates
 
         # Optimizer parameter groups (MSD requirement: both policy + projection).
         param_groups: list[dict] = [{"params": list(policy.parameters())}]
@@ -184,6 +188,7 @@ class PPOTrainer:
         # Training state
         self._global_step = 0
         self._update_count = 0
+        self._updates_this_invocation = 0
         self._current_phase = CurriculumPhase.PHASE_1
 
         # W&B
@@ -281,8 +286,24 @@ class PPOTrainer:
 
             # ── Periodic checkpointing ─────────────────────────────────────
             self._update_count += 1
+            self._updates_this_invocation += 1
+            
+            # Save checkpoint if it's the periodic interval
             if self._update_count % self._checkpoint_interval == 0:
                 self.save_checkpoint(tag=f"step_{self._global_step}")
+                
+            # Check if we should stop early after N updates
+            if self._stop_after_updates is not None and self._updates_this_invocation >= self._stop_after_updates:
+                logger.info(
+                    "Reached --stop-after-updates limit (%d). Saving checkpoint and exiting cleanly.", 
+                    self._stop_after_updates
+                )
+                if self._update_count % self._checkpoint_interval != 0:
+                    # Save a checkpoint with the same naming as normal interval checkpoints
+                    self.save_checkpoint(tag=f"step_{self._global_step}")
+                self._run.summary["final_step"] = self._global_step
+                self._run.finish()
+                return
 
         # Final checkpoint
         self.save_checkpoint(tag="final")

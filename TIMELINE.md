@@ -168,3 +168,10 @@ Template per entry:
     10-task local smoke test passes; structure/ranges verified.
 - Next: Architect implements `compute_ppo_loss` and `compute_gae` in
   `atar/policy/ppo_stubs.py`, then runs `scripts/train.py` on Kaggle T4.
+
+## 2026-09-28 — M7 PPO Early Stopping
+- Started: Added `--stop-after-updates N` flag to `scripts/train.py` and `PPOTrainer`.
+- Finished: Clean exit after exactly N updates in a single invocation, producing a checkpoint. Total step count and curriculum phase appropriately restored upon resumption. Verified with `test_stop_after_updates_and_resume` (5/5 tests passed in `tests/policy/test_checkpointing.py`).
+- Issues hit: none
+- Blocked: none
+- Next: Architect to implement PPO/GAE stubs and execute on training GPU.
