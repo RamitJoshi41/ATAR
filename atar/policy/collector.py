@@ -253,22 +253,17 @@ class VectorizedCollector:
 
     def _curriculum_reset(self, env: ATAREnv) -> tuple[np.ndarray, dict[str, Any]]:
         """
-        Reset env, re-rolling until the sampled task matches the allowed tiers.
-        Falls back after 20 attempts (avoids infinite loops on misconfigured data).
+        Reset env, strictly sampling only from allowed tiers.
         """
         if self._allowed_tiers is None:
             return env.reset()
 
-        for _ in range(20):
-            obs, info = env.reset()
-            if info.get("task_tier", -1) in self._allowed_tiers:
-                return obs, info
-
-        logger.warning(
-            "Could not sample a task from allowed tiers %s after 20 tries; "
-            "using last sampled task regardless.", self._allowed_tiers
-        )
-        return obs, info
+        allowed_tasks = [t for t in env._tasks if t.tier in self._allowed_tiers]
+        if not allowed_tasks:
+            raise RuntimeError(f"No tasks available for allowed tiers {self._allowed_tiers}")
+        
+        task = env._rng.choice(allowed_tasks)
+        return env.reset(task=task)
 
     def _compute_stats(self) -> dict[str, Any]:
         """Aggregate collection statistics for W&B logging."""

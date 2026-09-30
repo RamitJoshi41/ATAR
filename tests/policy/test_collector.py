@@ -201,3 +201,66 @@ def test_collector_stats_returned(
     assert "n_episodes_completed" in stats
     assert "mean_episode_reward" in stats
     assert "mean_episode_length" in stats
+
+def test_curriculum_reset_exact_filtering(
+    llm: LLMInterface, policy: ATARPolicy, data_dir: str
+) -> None:
+    """
+    Regression test: _curriculum_reset must never fall back to an unallowed tier
+    or log a failure warning. It must strictly filter env._tasks.
+    """
+    collector = VectorizedCollector(
+        llm=llm,
+        policy=policy,
+        n_envs=1,
+        rollout_steps=10,
+        data_dir=data_dir,
+        seed=123,
+    )
+    collector.set_allowed_tiers([1])
+    env = collector._envs[0]
+    
+    # Skew the task distribution to make rejection sampling fail
+    # 100 Tier 5 tasks, 1 Tier 1 task
+    from atar.shared.shared_types import Task, ActionType
+    env._tasks = [
+        Task(id="t1", tier=1, query="q", required_tools=[], ground_truth="1")
+    ] + [
+        Task(id=f"t5_{i}", tier=5, query="q", required_tools=[], ground_truth="5")
+        for i in range(100)
+    ]
+    
+    # Under old code, 20 random samples from 101 tasks (1% chance of success) 
+    # would fail ~81% of the time, falling back to Tier 5 and returning info["task_tier"] == 5.
+    # Under new code, it explicitly filters and picks the Tier 1 task, never failing.
+    
+    # Test 10 times to ensure it never falls back
+    for _ in range(10):
+        obs, info = collector._curriculum_reset(env)
+        assert info["task_tier"] == 1
+
+def test_curriculum_reset_raises_runtime_error_if_no_tasks(
+    llm: LLMInterface, policy: ATARPolicy, data_dir: str
+) -> None:
+    """
+    Verify that _curriculum_reset raises a RuntimeError if the allowed_tiers
+    filter results in zero valid tasks, rather than silently falling back
+    or crashing obscurely downstream.
+    """
+    collector = VectorizedCollector(
+        llm=llm,
+        policy=policy,
+        n_envs=1,
+        rollout_steps=10,
+        data_dir=data_dir,
+        seed=44,
+    )
+    
+    # data_dir fixture creates tasks up to tier 5
+    # Requesting tier 9 (which has 0 tasks)
+    collector.set_allowed_tiers([9])
+    env = collector._envs[0]
+    
+    import pytest
+    with pytest.raises(RuntimeError, match="No tasks available for allowed tiers"):
+        collector._curriculum_reset(env)
