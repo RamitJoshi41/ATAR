@@ -79,8 +79,8 @@ class RandomBaseline:
         Returns
         -------
         dict with keys:
-            accuracy          — fraction of episodes where TERMINATE was chosen
-                                (proxy for "gave an answer").
+            accuracy          — fraction of episodes whose final answer was
+                                correct (same grader as ATAREnv's reward).
             avg_episode_length — mean number of steps per episode.
             tool_call_rate    — fraction of steps that were not ANSWER_DIRECTLY
                                 or TERMINATE.
@@ -90,7 +90,7 @@ class RandomBaseline:
         total_lengths: list[int] = []
         tool_calls = 0
         total_steps = 0
-        n_terminated = 0
+        n_correct = 0
 
         for _ in range(n_tasks):
             env.reset()
@@ -98,18 +98,18 @@ class RandomBaseline:
             ep_length = 0
             while not done:
                 action_int = int(self._rng.integers(0, n_actions))
-                _, _, terminated, truncated, _ = env.step(action_int)
+                _, _, terminated, truncated, info = env.step(action_int)
                 done = terminated or truncated
                 ep_length += 1
                 total_steps += 1
                 if action_int not in (ActionType.ANSWER_DIRECTLY, ActionType.TERMINATE):
                     tool_calls += 1
-                if terminated and action_int == ActionType.TERMINATE:
-                    n_terminated += 1
+                if terminated and info.get("correct", False):
+                    n_correct += 1
             total_lengths.append(ep_length)
 
         return {
-            "accuracy": n_terminated / n_tasks,
+            "accuracy": n_correct / n_tasks,
             "avg_episode_length": float(np.mean(total_lengths)),
             "tool_call_rate": tool_calls / max(total_steps, 1),
         }
@@ -158,7 +158,7 @@ class ReActBaseline:
         total_lengths: list[int] = []
         tool_calls = 0
         total_steps = 0
-        n_terminated = 0
+        n_correct = 0
 
         for _ in range(n_tasks):
             _, reset_info = env.reset()
@@ -193,22 +193,28 @@ class ReActBaseline:
 
                 if action_int not in (ActionType.ANSWER_DIRECTLY, ActionType.TERMINATE):
                     tool_calls += 1
-                if terminated and action_int == ActionType.TERMINATE:
-                    n_terminated += 1
+                if terminated and info.get("correct", False):
+                    n_correct += 1
 
-                # Append the tool result as an Observation turn.
+                # Append Action → Observation so the next decision sees
+                # what was already tried.
+                messages.append(
+                    {"role": "assistant", "content": f"Action: {ActionType(action_int).name}"}
+                )
                 tool_result = info.get("tool_result")
                 if tool_result is not None:
                     observation = (
                         f"Observation: success={tool_result.success}, "
                         f"output={str(tool_result.output)[:200]}"
                     )
-                    messages.append({"role": "assistant", "content": observation})
+                else:
+                    observation = "Observation: no tool result (call rejected or not a tool action)."
+                messages.append({"role": "user", "content": observation})
 
             total_lengths.append(ep_length)
 
         return {
-            "accuracy": n_terminated / n_tasks,
+            "accuracy": n_correct / n_tasks,
             "avg_episode_length": float(np.mean(total_lengths)),
             "tool_call_rate": tool_calls / max(total_steps, 1),
         }

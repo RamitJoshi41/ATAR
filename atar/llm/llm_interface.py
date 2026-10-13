@@ -9,6 +9,7 @@ never hardcoded, so the architect can swap between the 0.5B stand-in (local
 """
 
 import json
+import math
 from typing import cast
 
 import torch
@@ -96,11 +97,18 @@ class LLMInterface:
         hidden_size: int = self.base_model.config.hidden_size
 
         # Trainable projection layer; seeded for reproducibility before training.
-        torch.manual_seed(42)
-        proj_dtype = torch.float32 if self.device == "cpu" else torch.float16
-        self.projection = nn.Linear(hidden_size, 384, dtype=proj_dtype).to(
-            self.base_model.device
-        )
+        # Always float32, even when the base model runs in float16 on CUDA:
+        # the projection is co-trained by the PPO optimizer, and Adam updates
+        # on float16 weights underflow (the layer is only ~1.4M params, so the
+        # memory cost is negligible).  A local Generator keeps the global
+        # torch RNG untouched.
+        gen = torch.Generator().manual_seed(42)
+        self.projection = nn.Linear(hidden_size, 384, dtype=torch.float32)
+        with torch.no_grad():
+            bound = 1.0 / math.sqrt(hidden_size)
+            self.projection.weight.uniform_(-bound, bound, generator=gen)
+            self.projection.bias.uniform_(-bound, bound, generator=gen)
+        self.projection = self.projection.to(self.base_model.device)
         self.projection.requires_grad_(True)
 
         # Wrap with Outlines for constrained generation (Outlines 1.3.x API).
@@ -146,11 +154,12 @@ class LLMInterface:
         # Mean pool over sequence dimension → (1, hidden_size)
         mean_pooled = last_hidden.mean(dim=1)
 
-        # Cast to projection dtype and apply linear → (1, 384)
-        projected = self.projection(mean_pooled.to(self.projection.weight.dtype))
+        # Apply the projection → (1, 384); no grad needed at encode time.
+        with torch.no_grad():
+            projected = self.project(mean_pooled)
 
         # Return (384,) on CPU for downstream consistency
-        return projected.squeeze(0).to(torch.float32).detach().cpu()
+        return projected.squeeze(0).cpu()
 
     def generate(
         self,
@@ -253,6 +262,53 @@ class LLMInterface:
         """
         if not batch_messages:
             return torch.zeros(0, 384, dtype=torch.float32)
+        pooled = self.encode_pooled_batch(batch_messages)
+        with torch.no_grad():
+            return self.project(pooled).cpu()
+
+    def project(self, pooled: torch.Tensor) -> torch.Tensor:
+        """
+        Apply the trainable projection to mean-pooled hidden states.
+
+        Unlike encode()/encode_batch(), the result is NOT detached: when
+        called outside ``torch.no_grad()`` gradients flow into
+        ``self.projection``.  M7's PPO update uses this to co-train the
+        projection with the policy (the "co-adapted projection" design).
+
+        Parameters
+        ----------
+        pooled : torch.Tensor
+            Shape (N, hidden_size), any float dtype, any device.
+
+        Returns
+        -------
+        torch.Tensor
+            Shape (N, 384), float32, on the projection's device.
+        """
+        weight = self.projection.weight
+        return self.projection(pooled.to(device=weight.device, dtype=weight.dtype))
+
+    def encode_pooled_batch(self, batch_messages: list[list[dict]]) -> torch.Tensor:
+        """
+        Frozen-LLM half of encode_batch(): mean-pooled last hidden states,
+        before the projection.
+
+        M7 stores these in the rollout buffer so the PPO update can re-apply
+        the (changing) projection with gradients via project().
+
+        Parameters
+        ----------
+        batch_messages : list[list[dict]]
+            N conversation histories in OpenAI chat format.
+
+        Returns
+        -------
+        torch.Tensor
+            Shape (N, hidden_size), dtype float32, on CPU, no grad.
+        """
+        hidden_size: int = self.projection.in_features
+        if not batch_messages:
+            return torch.zeros(0, hidden_size, dtype=torch.float32)
 
         # Apply chat template to each conversation → N prompt strings.
         prompts: list[str] = [
@@ -286,9 +342,7 @@ class LLMInterface:
         lengths = mask.sum(dim=1).clamp(min=1e-8)              # (N, 1)
         mean_pooled = sum_hidden / lengths                     # (N, hidden_size)
 
-        # Project to (N, 384) and return on CPU as float32.
-        projected = self.projection(mean_pooled.to(self.projection.weight.dtype))
-        return projected.to(torch.float32).detach().cpu()
+        return mean_pooled.to(torch.float32).detach().cpu()
 
     def generate_batch(
         self,

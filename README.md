@@ -296,8 +296,9 @@ A dedicated root-cause diagnostic confirmed:
   optimizer co-training both `ATARPolicy.parameters()` and
   `llm.projection.parameters()`, W&B logging, checkpoint save/load, `--resume-from`
   checkpoint restoration.
-- **`compute_ppo_loss` / `compute_gae`** — stubs with full docstrings and exact MSD
-  signatures. Raise `NotImplementedError` — architect implements these.
+- **`compute_ppo_loss` / `compute_gae`** — originally architect stubs; now
+  implemented (clipped surrogate + MSE value loss + entropy bonus; GAE over one
+  env trajectory). See "2026-10-13 fixes" below.
 - **`RandomBaseline` / `ReActBaseline`** — both run episodes and return
   `{accuracy, avg_episode_length, tool_call_rate}` dicts for comparison.
 - **`scripts/train.py`** — standalone CLI with argparse, all hyperparameters as
@@ -349,7 +350,76 @@ real `WANDB_API_KEY` and `--wandb-mode online`.
 **Deviations from the MSD:**
 1. `generate_batch` is sequential internally (Outlines 1.3.x limitation) — fully
    documented in ARCHITECTURE_DECISIONS.md and this section.
-2. The PPO update loop is wrapped in `try/except NotImplementedError` to allow
-   scaffold testing before the architect's GAE/PPO stubs are filled in.
+2. ~~The PPO update loop is wrapped in `try/except NotImplementedError`~~ —
+   removed 2026-10-13 now that the loss/GAE are implemented (it could hide
+   real errors).
 3. `test_encode_batch_matches_single_smoke` uses cosine similarity > 0.99
    instead of exact tolerance — float16 padding rounding (expected, documented).
+
+---
+
+## Evaluation Harness (`scripts/evaluate.py`, `atar/evaluation/`)
+
+**What:** Compares agents on the 200 held-out test tasks (`data/tasks_test.jsonl`).
+- Agents: `atar` (trained policy, greedy argmax), `random`, `zeroshot`
+  (ANSWER_DIRECTLY then TERMINATE), `react` (prompted ReAct loop via M3).
+- Metrics (overall and per tier, 95% bootstrap CIs): `accuracy`,
+  `success_rate`, `avg_tool_calls`, `efficiency = accuracy / (1 + avg_tool_calls)`,
+  `recovery_rate`, `mean_latency`.
+- Outputs: `comparison.md`, `results.json`, `per_task.jsonl`,
+  `failures.jsonl` (ATAR failures, input for M6), per-agent
+  `per_task_<agent>.jsonl` + `.meta.json` fingerprints.
+- Safety checks before running: test/train disjointness (ids and queries),
+  every tier present, and each tier's share within 5% of the training set.
+- Resumable: completed task ids are skipped, but only if the fingerprint
+  (model, seed, grader version, checkpoint SHA-256) matches — otherwise it
+  refuses instead of mixing results from different checkpoints.
+- Loads the checkpoint's co-trained projection; refuses a checkpoint whose
+  projection hidden size doesn't match `--model-name` (e.g. a 7B-trained
+  policy evaluated on the 0.5B stand-in).
+
+**History:** First built by Gemini on 2026-10-02. A review on 2026-10-13 found
+that report overstated: it claimed 41/41 tests but only 12 ran (the 29 metrics
+tests sat in `tests/evaluation/__init__.py`, which pytest never collects), the
+answer grader was wrong in both directions, resume could silently mix
+checkpoints, validation-rejected tool calls weren't counted as failures,
+`--n-tasks` was a no-op and the "stratification check" only counted. All
+fixed — see "2026-10-13 fixes" below and ADR-17/18.
+
+**What actually happened when run (stand-in model, CPU):**
+- `venv/bin/python3 -m pytest tests/evaluation/ -v` — **53 passed** (30 metrics + 23 runner).
+- `scripts/evaluate.py --agents random,zeroshot --max-tasks 3` on
+  Qwen2.5-0.5B, CPU: completed; zeroshot 1/3 correct, random 0/3 (3 tasks —
+  a code-path check, not a result). Re-running with `--seed 7` into the same
+  `--out-dir` was refused as designed; re-running with the same settings
+  resumed and skipped the 3 completed tasks.
+
+---
+
+## 2026-10-13 fixes (training pipeline review)
+
+A review of the M7 pipeline and the first Kaggle run (12 PPO updates, ~25k
+steps, checkpoints up to step 24576) found bugs that made that run's results
+meaningless. Fixed, with regression tests:
+
+| Bug | Effect | Fix |
+|---|---|---|
+| GAE over the round-robin-interleaved buffer | V(s_{t+1}) came from another env's episode; the +10/−5 answer reward almost never reached the tool calls that led to it | GAE per `env_id`, bootstrapped from V(current state) for cut-off episodes (ADR-15) |
+| `returns = values + normalised advantages` | value head never learned the real ±10 scale | returns from raw advantages; normalise only inside the loss |
+| projection never trained | `encode()` output was detached → zero gradient; not checkpointed (`--freeze-projection` ablation was identical to the main run) | store pooled LLM features, re-apply `project()` with grad in the PPO update; float32 projection; saved in checkpoints and loaded by eval (ADR-16) |
+| resume didn't restore curriculum tiers | a run resumed in Phase 2/3 kept sampling tiers 1–2 | `restore_from_checkpoint` sets the phase's tiers and restarts episodes |
+| substring answer grader (env reward and eval) | `"6"` matched `61559.0`, `"I do not know"` matched `no`; `"2660 + 58899 = 61559"` was marked wrong | one shared grader `atar/env/answer_matching.py` (ADR-17) |
+| baselines' `accuracy` | counted TERMINATE actions, not correct answers | uses the env's `info["correct"]` |
+| size-1 final minibatch | advantage std = NaN → NaN weights | normalise only when n > 1 |
+
+Also added: `--wandb-run-id` (and the run id is stored in checkpoints, so all
+Kaggle sessions of one run log to the same W&B run), and W&B charts for the
+action distribution (`action_frac/*`) and success rate per tier.
+
+**Consequence:** the old checkpoints cannot be resumed or meaningfully
+evaluated (different reward, different projection) — training restarts.
+See `KAGGLE.md` for the runbook.
+
+**What actually happened when run (stand-in model, CPU):** full suite
+`venv/bin/python3 -m pytest tests/ atar/tests` — **379 passed, 0 failed** (8 min 58 s).
+

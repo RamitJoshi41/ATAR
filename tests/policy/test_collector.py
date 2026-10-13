@@ -154,21 +154,23 @@ def test_collector_encode_batch_called_not_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Confirm encode_batch() is called during collection (not single encode()).
-    We patch encode_batch to count calls and check it was called >= 1 time
-    while encode() call count stays at 0 for the collector's own path.
-
-    Note: encode() may still be called by individual env.step() internals
-    since skip_internal_encode=True prevents that — so we check the batch path.
+    Confirm the batched encode path (encode_pooled_batch) is used during
+    collection, never the single-example encode().
     """
-    batch_call_count = {"n": 0}
-    original_encode_batch = llm.encode_batch
+    calls = {"batch": 0, "single": 0}
+    original_pooled = llm.encode_pooled_batch
+    original_encode = llm.encode
 
-    def counting_encode_batch(batch_messages):
-        batch_call_count["n"] += 1
-        return original_encode_batch(batch_messages)
+    def counting_pooled(batch_messages):
+        calls["batch"] += 1
+        return original_pooled(batch_messages)
 
-    monkeypatch.setattr(llm, "encode_batch", counting_encode_batch)
+    def counting_encode(messages):
+        calls["single"] += 1
+        return original_encode(messages)
+
+    monkeypatch.setattr(llm, "encode_pooled_batch", counting_pooled)
+    monkeypatch.setattr(llm, "encode", counting_encode)
 
     collector = VectorizedCollector(
         llm=llm,
@@ -180,9 +182,38 @@ def test_collector_encode_batch_called_not_loop(
     )
     collector.collect(n_steps=6)
 
-    assert batch_call_count["n"] >= 1, (
-        "encode_batch() was never called — collector may be using single encode() loop"
+    assert calls["batch"] >= 1, "encode_pooled_batch() was never called"
+    assert calls["single"] == 0, "collector fell back to per-env encode()"
+
+
+def test_collector_batch_has_pooled_env_ids_and_bootstrap(
+    llm: LLMInterface, policy: ATARPolicy, data_dir: str
+) -> None:
+    """
+    The rollout batch must carry what the PPO update needs for projection
+    co-training (pooled) and per-env GAE (env_ids, bootstrap_values), and the
+    stored semantic slice must equal project(pooled) — the invariant that
+    makes the first PPO ratio exactly 1.
+    """
+    n_envs = 3
+    collector = VectorizedCollector(
+        llm=llm, policy=policy, n_envs=n_envs, rollout_steps=7,
+        data_dir=data_dir, seed=5,
     )
+    buffer, _ = collector.collect(n_steps=7)
+    batch = buffer.to_batch()
+
+    assert batch.pooled is not None
+    assert batch.pooled.shape == (7, llm.projection.in_features)
+    # Round-robin fill: env ids 0,1,2,0,1,2,0
+    assert batch.env_ids.tolist() == [0, 1, 2, 0, 1, 2, 0]
+    assert batch.bootstrap_values is not None
+    assert batch.bootstrap_values.shape == (n_envs,)
+
+    with torch.no_grad():
+        reprojected = llm.project(batch.pooled).cpu()
+    s, e = SEMANTIC_RANGE
+    assert torch.allclose(batch.states[:, s:e], reprojected, atol=1e-5)
 
 
 def test_collector_stats_returned(
@@ -201,6 +232,11 @@ def test_collector_stats_returned(
     assert "n_episodes_completed" in stats
     assert "mean_episode_reward" in stats
     assert "mean_episode_length" in stats
+    if stats["n_episodes_completed"] > 0:
+        assert 0.0 <= stats["success_rate"] <= 1.0
+        action_fracs = [v for k, v in stats.items() if k.startswith("action_frac/")]
+        assert len(action_fracs) == len(ActionType)
+        assert sum(action_fracs) == pytest.approx(1.0)
 
 def test_curriculum_reset_exact_filtering(
     llm: LLMInterface, policy: ATARPolicy, data_dir: str

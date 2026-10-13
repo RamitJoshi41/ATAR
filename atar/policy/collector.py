@@ -6,8 +6,10 @@ Architecture overview
 N ATAREnv instances share a single LLMInterface object (one set of model weights).
 Each collection cycle advances all N environments by one step, using:
 
-  1. A SINGLE encode_batch() call across all N current message lists →
-     one GPU forward pass producing (N, 384) semantic vectors.
+  1. A SINGLE encode_pooled_batch() call across all N current message lists →
+     one GPU forward pass producing (N, hidden) pooled features, projected
+     to (N, 384) by M3's projection (pooled features are stored so the
+     PPO update can co-train the projection).
   2. A SINGLE batched policy.forward() call → (N, 7) logits + (N, 1) values.
   3. N sequential env.step() calls (I/O bound, not GPU bound).
 
@@ -15,7 +17,7 @@ ATAREnv is constructed with skip_internal_encode=True, which prevents each
 env.step() from calling llm.encode() internally.  The collector takes ownership
 of the semantic encoding and writes the correct batched vectors into the stored
 EpisodeStep states.  This trades N sequential encode() calls (one inside each
-env.step()) for a single encode_batch() call — the primary GPU throughput gain.
+env.step()) for a single batched encode call — the primary GPU throughput gain.
 
 Episode management
 ------------------
@@ -41,7 +43,6 @@ from atar.llm.llm_interface import LLMInterface
 from atar.env.atar_env import ATAREnv
 from atar.policy.policy_network import ATARPolicy
 from atar.policy.rollout_buffer import RolloutBuffer
-from atar.policy.types import CurriculumPhase
 from atar.shared.shared_types import (
     ActionType,
     EpisodeStep,
@@ -118,7 +119,7 @@ class VectorizedCollector:
         self._obs: list[np.ndarray] = []
         self._episode_info: list[dict[str, Any]] = []
         for env in self._envs:
-            obs, info = env.reset()
+            obs, info = self._curriculum_reset(env)
             self._obs.append(obs)
             self._episode_info.append(info)
 
@@ -126,6 +127,7 @@ class VectorizedCollector:
         self._episode_rewards: list[float] = [0.0] * n_envs
         self._episode_lengths: list[int] = [0] * n_envs
         self._completed_episodes: list[dict[str, Any]] = []
+        self._action_counts: np.ndarray = np.zeros(len(ActionType), dtype=np.int64)
 
     # ------------------------------------------------------------------
     # Public API
@@ -139,12 +141,25 @@ class VectorizedCollector:
         # This is a no-op on the env objects themselves; the filtering happens
         # in _curriculum_reset() below.
 
+    def reset_all(self) -> None:
+        """
+        Abandon every in-flight episode and start fresh ones from the
+        currently allowed tiers.  Called after restoring a checkpoint so a
+        resumed run samples from the correct curriculum phase immediately.
+        """
+        for i, env in enumerate(self._envs):
+            obs, info = self._curriculum_reset(env)
+            self._obs[i] = obs
+            self._episode_info[i] = info
+            self._episode_rewards[i] = 0.0
+            self._episode_lengths[i] = 0
+
     def collect(self, n_steps: int | None = None) -> tuple[RolloutBuffer, dict[str, Any]]:
         """
         Collect rollout data across all N environments.
 
         Each cycle:
-          1. encode_batch() → (N, 384) — single GPU pass.
+          1. encode_pooled_batch() + project() → (N, 384) — single GPU pass.
           2. policy.forward() on (N, 512) states — single GPU pass.
           3. Loop over N envs calling step() with the sampled action.
           4. Terminated/truncated envs reset independently.
@@ -165,26 +180,14 @@ class VectorizedCollector:
         buffer = RolloutBuffer(capacity=steps)
 
         self._completed_episodes.clear()
+        self._action_counts[:] = 0
         total_steps_collected = 0
 
         while total_steps_collected < steps:
-            # ── Step 1: Batch-encode all N current message lists ──────────
-            batch_msgs = [env._messages for env in self._envs]   # N message lists
-            # encode_batch() → (N, 384) float32 on CPU
-            semantic_vecs: torch.Tensor = self._llm.encode_batch(batch_msgs)
-
-            # ── Step 2: Build full (N, 512) state vectors ─────────────────
-            states_np = np.stack(self._obs, axis=0)   # (N, 512) from last obs
-            states = torch.as_tensor(states_np, dtype=torch.float32)
-            # Overwrite semantic slice with the freshly-computed batch encoding.
-            s, e = SEMANTIC_RANGE
-            states[:, s:e] = semantic_vecs             # (N, 384) → slice of (N, 512)
-
-            # ── Step 3: Policy forward pass ───────────────────────────────
-            self._policy.eval()
-            with torch.no_grad():
-                states_dev = states.to(self._device)
-                logits, values = self._policy(states_dev)   # (N, 7), (N, 1)
+            # ── Steps 1-3: batch-encode all N envs, build states, run policy ──
+            # pooled: (N, hidden) pre-projection features, stored per
+            # transition so the PPO update can co-train the projection.
+            pooled, states, logits, values = self._encode_and_evaluate()
             dist = Categorical(logits=logits)
             actions = dist.sample()                         # (N,)
             log_probs = dist.log_prob(actions)              # (N,)
@@ -223,8 +226,9 @@ class VectorizedCollector:
                     log_prob=float(log_probs[i].item()),
                     value_estimate=float(values[i].item()),
                 )
-                buffer.add(ep_step)
+                buffer.add(ep_step, pooled=pooled[i], env_id=i)
                 total_steps_collected += 1
+                self._action_counts[action_int] += 1
 
                 # Per-episode tracking
                 self._episode_rewards[i] += reward_float
@@ -235,6 +239,7 @@ class VectorizedCollector:
                         "reward": self._episode_rewards[i],
                         "length": self._episode_lengths[i],
                         "tier": info.get("task_tier", -1),
+                        "correct": bool(info.get("correct", False)),
                     })
                     self._episode_rewards[i] = 0.0
                     self._episode_lengths[i] = 0
@@ -244,12 +249,44 @@ class VectorizedCollector:
 
                 self._obs[i] = next_obs
 
+        # Bootstrap values for GAE: V(s) of the state each env is in now.
+        # Only used for envs whose last stored transition was not terminal.
+        _, _, _, last_values = self._encode_and_evaluate()
+        buffer.bootstrap_values = last_values.squeeze(-1).detach().cpu().to(torch.float32)
+
         stats = self._compute_stats()
         return buffer, stats
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _encode_and_evaluate(
+        self,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        One batched encode + one batched policy forward over all N envs.
+
+        Returns
+        -------
+        pooled : (N, hidden_size) float32 CPU — pre-projection LLM features.
+        states : (N, 512) float32 CPU — full states (semantic slice filled).
+        logits : (N, 7) on the policy device.
+        values : (N, 1) on the policy device.
+        """
+        batch_msgs = [env._messages for env in self._envs]   # N message lists
+        pooled = self._llm.encode_pooled_batch(batch_msgs)    # one GPU pass
+        with torch.no_grad():
+            semantic_vecs = self._llm.project(pooled).cpu()   # (N, 384)
+
+        states = torch.as_tensor(np.stack(self._obs, axis=0), dtype=torch.float32)
+        s, e = SEMANTIC_RANGE
+        states[:, s:e] = semantic_vecs
+
+        self._policy.eval()
+        with torch.no_grad():
+            logits, values = self._policy(states.to(self._device))   # (N, 7), (N, 1)
+        return pooled, states, logits, values
 
     def _curriculum_reset(self, env: ATAREnv) -> tuple[np.ndarray, dict[str, Any]]:
         """
@@ -275,8 +312,23 @@ class VectorizedCollector:
             }
         rewards = [ep["reward"] for ep in self._completed_episodes]
         lengths = [ep["length"] for ep in self._completed_episodes]
-        return {
+        stats: dict[str, Any] = {
             "n_episodes_completed": len(self._completed_episodes),
             "mean_episode_reward": float(np.mean(rewards)),
             "mean_episode_length": float(np.mean(lengths)),
+            "success_rate": float(np.mean([ep["correct"] for ep in self._completed_episodes])),
         }
+        # Per-tier success — shows whether the curriculum is being learned.
+        for tier in sorted({ep["tier"] for ep in self._completed_episodes}):
+            tier_eps = [ep for ep in self._completed_episodes if ep["tier"] == tier]
+            stats[f"success_rate/tier_{tier}"] = float(
+                np.mean([ep["correct"] for ep in tier_eps])
+            )
+        # Action distribution — the first thing to check for policy collapse
+        # (e.g. always ANSWER_DIRECTLY).
+        total_actions = max(int(self._action_counts.sum()), 1)
+        for action in ActionType:
+            stats[f"action_frac/{action.name}"] = float(
+                self._action_counts[action.value] / total_actions
+            )
+        return stats

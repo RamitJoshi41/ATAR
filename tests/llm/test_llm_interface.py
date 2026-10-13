@@ -130,6 +130,14 @@ def test_generate_constrained_smoke(llm: LLMInterface) -> None:
     ]
     assert len(varied_inputs) == 20, "Must have exactly 20 trial inputs"
 
+    # Generation samples from the global torch RNG.  LLMInterface() used to
+    # reset that RNG to 42 as a side effect (removed 2026-10-13), which is
+    # what made this test deterministic; seed explicitly instead.  The 0.5B
+    # stand-in occasionally emits a string longer than max_new_tokens
+    # (unterminated JSON) for some seeds — a stand-in-model limitation; in
+    # ATAREnv such a failure becomes an invalid-params step, not a crash.
+    torch.manual_seed(42)
+
     success_count = 0
     for user_text in varied_inputs:
         messages = [
@@ -471,3 +479,59 @@ def test_encode_batch_single_forward_pass_count(llm: LLMInterface) -> None:
         )
     finally:
         llm.base_model.forward = real_forward
+
+
+# ---------------------------------------------------------------------------
+# Projection co-training support (added 2026-10-13).
+# Stand-in model smoke tests — they prove the code path, not 7B behaviour.
+# ---------------------------------------------------------------------------
+
+def test_pooled_then_project_equals_encode_batch_smoke(llm: LLMInterface) -> None:
+    """encode_batch(x) == project(encode_pooled_batch(x)) — the collector relies on this."""
+    batch_msgs = [
+        [{"role": "user", "content": "What is 2 + 2?"}],
+        [{"role": "user", "content": "Name the capital of France, please."}],
+    ]
+    pooled = llm.encode_pooled_batch(batch_msgs)
+    assert pooled.shape == (2, llm.base_model.config.hidden_size)
+    assert pooled.dtype == torch.float32
+    assert not pooled.requires_grad
+
+    with torch.no_grad():
+        via_project = llm.project(pooled).cpu()
+    assert torch.allclose(via_project, llm.encode_batch(batch_msgs), atol=1e-5)
+
+
+def test_project_carries_gradient_into_projection_smoke(llm: LLMInterface) -> None:
+    """
+    encode()/encode_batch() are detached; project() must NOT be — it is how
+    the PPO update co-trains the projection.
+    """
+    pooled = llm.encode_pooled_batch([[{"role": "user", "content": "grad check"}]])
+    llm.projection.zero_grad()
+    llm.project(pooled).sum().backward()
+    grad = llm.projection.weight.grad
+    assert grad is not None and grad.abs().sum() > 0
+    llm.projection.zero_grad()
+
+
+def test_projection_is_float32_and_seeded_smoke(llm: LLMInterface) -> None:
+    """
+    float32 so Adam can update it on CUDA; initialised from a local generator
+    (seed 42) so the initial projection is identical regardless of the global
+    torch seed — every fresh training run / eval starts from the same weights.
+    """
+    assert llm.projection.weight.dtype == torch.float32
+    torch.manual_seed(123)   # arbitrary global seed must not matter
+    other = LLMInterface(model_name=llm.model_name, device=llm.device)
+    assert torch.equal(other.projection.weight.cpu(), _initial_projection_weight(other))
+
+
+def _initial_projection_weight(llm: LLMInterface) -> torch.Tensor:
+    """Re-derive the seeded init independently of the live (possibly trained) module."""
+    import math
+    hidden = llm.projection.in_features
+    gen = torch.Generator().manual_seed(42)
+    w = torch.empty(384, hidden, dtype=torch.float32)
+    bound = 1.0 / math.sqrt(hidden)
+    return w.uniform_(-bound, bound, generator=gen)

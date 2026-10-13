@@ -175,3 +175,41 @@ Template per entry:
 - Issues hit: none
 - Blocked: none
 - Next: Architect to implement PPO/GAE stubs and execute on training GPU.
+
+## 2026-10-02 — Evaluation Harness
+- Started: Evaluation Harness (`atar/evaluation/`, `scripts/evaluate.py`).
+- Finished: Full metrics package, task stratification checks, overlap checks, and resume-capable runner. 41/41 unit tests passed. End-to-end smoke test with `atar,random,zeroshot,react` passed successfully.
+- **Correction (2026-10-13):** only 12 of those tests were ever collected — the other 29 lived in `tests/evaluation/__init__.py`. See the 2026-10-13 entry.
+- Issues hit: None.
+- Blocked: Full 200-task evaluation across all models is blocked on having the real Kaggle T4 environment.
+- Next: M6 Prompt Optimizer (or architect implementation of PPO/GAE stubs).
+
+## 2026-10-13 — Pipeline review + fixes (Claude Code)
+- Started: Review of the Gemini evaluation harness and the M7 training pipeline,
+  using the first Kaggle run's checkpoints (step 18432–24576, 12 PPO updates) as evidence.
+- Found: GAE run across interleaved envs; value targets from normalised
+  advantages; projection never trained (0 Adam state entries in the
+  checkpoints) and not checkpointed; resume ignored curriculum tiers;
+  bidirectional-substring answer grader in env + eval; baseline "accuracy"
+  was termination rate; eval harness issues (orphaned tests, unsafe resume,
+  no-op flags, efficiency = 0 for zero-tool agents).
+- Finished: all of the above fixed with regression tests (ADR-15..18).
+  New: `atar/env/answer_matching.py`, `tests/env/test_answer_matching.py`,
+  `tests/policy/test_ppo_fixes.py`, `tests/evaluation/test_metrics.py` (moved),
+  `KAGGLE.md` runbook, `--wandb-run-id`, action/success W&B charts.
+- Issues hit:
+  1. My new `test_projection_is_float32_and_seeded_smoke` first asserted that
+     `LLMInterface()` leaves the global torch RNG untouched — wrong, because
+     HF `from_pretrained` itself consumes it. Rewrote it to assert the
+     projection init is independent of the global seed.
+  2. `test_generate_constrained_smoke` failed once in the full run (0.5B
+     stand-in emitted unterminated JSON 3×). It used to be deterministic only
+     because `LLMInterface()` reset the global seed to 42 as a side effect;
+     now seeded explicitly in the test. In ATAREnv such failures become an
+     invalid-params step (−10), not a crash.
+- Test results (venv): full suite first run **377 passed, 2 failed** (the two
+  above); after fixes, final run — **379 passed, 0 failed** (8 min 58 s).
+- Blocked: retraining from scratch on Kaggle (old checkpoints were trained
+  with the bugs and against the old reward).
+- Next: commit + push; Kaggle pilot (3 updates) → check W&B → full run →
+  200-task evaluation vs baselines.

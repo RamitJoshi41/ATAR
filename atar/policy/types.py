@@ -7,7 +7,7 @@ all modules).  These types are internal to M7 and not exposed to other modules.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any
 
@@ -36,6 +36,18 @@ class RolloutBatch:
     advantages: torch.Tensor   # (T,)     float32  — filled by compute_gae()
     returns: torch.Tensor      # (T,)     float32  — filled by compute_gae()
     dones: torch.Tensor        # (T,)     bool
+    # Mean-pooled frozen-LLM hidden states (pre-projection).  When present,
+    # the PPO update re-applies M3's projection to these WITH gradients so
+    # the projection is co-trained (states[:, 0:384] holds the value it had
+    # at collection time).  None in unit tests that build batches by hand.
+    pooled: torch.Tensor | None = None          # (T, hidden_size) float32
+    # Which of the N parallel envs produced each transition.  The buffer is
+    # filled round-robin across envs, so GAE must be computed per env_id —
+    # never across the flat buffer.  None = treat as one trajectory.
+    env_ids: torch.Tensor | None = None         # (T,) int64
+    # V(s) of each env's current (post-rollout) state, used to bootstrap
+    # GAE when an env's last stored transition is not terminal.
+    bootstrap_values: torch.Tensor | None = None  # (N,) float32
 
 
 @dataclass
@@ -63,3 +75,9 @@ class CheckpointState:
     policy_state_dict: dict[str, Any]
     optimizer_state_dict: dict[str, Any]
     scheduler_state_dict: dict[str, Any] | None
+    # M3 projection weights (co-trained with the policy).  None for
+    # checkpoints written before the projection was co-trained.
+    projection_state_dict: dict[str, Any] | None = None
+    # W&B run id so a resumed session (e.g. a new Kaggle notebook) logs to
+    # the same run instead of starting a new one.
+    wandb_run_id: str | None = None

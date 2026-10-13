@@ -11,14 +11,15 @@ Implements:
   - Weights & Biases logging.
   - Ablation config flags: no_curriculum, freeze_projection.
 
-The actual PPO update (compute_ppo_loss / compute_gae) is left as stubs
-for the architect to implement — see ppo_stubs.py.
+The PPO maths lives in ppo_stubs.py (compute_ppo_loss / compute_gae).
+This file handles everything around it: per-env GAE, re-applying the
+projection with gradients, minibatching, clipping, scheduling, checkpoints.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import logging
-import os
 from pathlib import Path
 from typing import Any, Literal
 
@@ -33,6 +34,7 @@ from atar.policy.collector import VectorizedCollector
 from atar.policy.curriculum import CurriculumManager
 from atar.policy.ppo_stubs import compute_ppo_loss, compute_gae
 from atar.policy.types import CheckpointState, CurriculumPhase, RolloutBatch
+from atar.shared.shared_types import SEMANTIC_RANGE
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +98,9 @@ class PPOTrainer:
         Ablation: freeze M3's projection layer (don't co-train with policy).
     stop_after_updates : int | None
         Stop training cleanly after this many updates in this invocation.
+    wandb_run_id : str | None
+        Resume logging into this existing W&B run (multi-session training).
+        None starts a new run.
     """
 
     def __init__(
@@ -126,6 +131,7 @@ class PPOTrainer:
         no_curriculum: bool = False,
         freeze_projection: bool = False,
         stop_after_updates: int | None = None,
+        wandb_run_id: str | None = None,
     ) -> None:
         self._policy = policy.to(device)
         self._llm = llm
@@ -149,11 +155,17 @@ class PPOTrainer:
         self._stop_after_updates = stop_after_updates
 
         # Optimizer parameter groups (MSD requirement: both policy + projection).
+        # Gradients reach the projection because the PPO update re-applies it
+        # to the stored pooled LLM features (see _with_projected_states).
         param_groups: list[dict] = [{"params": list(policy.parameters())}]
         if not freeze_projection:
             param_groups.append({"params": list(llm.projection.parameters())})
         else:
+            llm.projection.requires_grad_(False)
             logger.info("Ablation: freeze_projection=True — M3 projection not co-trained")
+        self._trainable_params: list[nn.Parameter] = [
+            p for group in param_groups for p in group["params"]
+        ]
 
         self._optimizer = torch.optim.Adam(param_groups, lr=lr)
 
@@ -213,6 +225,7 @@ class PPOTrainer:
             project=wandb_project,
             config=hparams,
             mode=wandb_mode,
+            id=wandb_run_id,
             resume="allow",
         )
 
@@ -263,16 +276,8 @@ class PPOTrainer:
             # compute_gae raises NotImplementedError until architect implements it.
             # When implemented, it fills batch.advantages and batch.returns.
             batch = buffer.to_batch()
-            # NOTE: The following block is wrapped in try/except so the training
-            # scaffold can be tested end-to-end without the architect stubs.
-            try:
-                self._fill_gae(batch)
-                self._run_ppo_update(batch)
-            except NotImplementedError:
-                logger.debug(
-                    "compute_gae/compute_ppo_loss not yet implemented (architect stub). "
-                    "Skipping PPO update at step %d.", self._global_step
-                )
+            self._fill_gae(batch)
+            self._run_ppo_update(batch)
 
             # ── Logging ───────────────────────────────────────────────────
             entropy_coef = self._current_entropy_coef()
@@ -337,6 +342,8 @@ class PPOTrainer:
             policy_state_dict=self._policy.state_dict(),
             optimizer_state_dict=self._optimizer.state_dict(),
             scheduler_state_dict=self._scheduler.state_dict(),
+            projection_state_dict=self._llm.projection.state_dict(),
+            wandb_run_id=getattr(self._run, "id", None),
         )
         path = self._checkpoint_dir / f"checkpoint_{tag}.pt"
         torch.save(ckpt.__dict__, path)
@@ -365,8 +372,9 @@ class PPOTrainer:
         Restore trainer state from a checkpoint file.
 
         Called when --resume-from is passed to scripts/train.py.
-        Restores: policy weights, optimizer state, scheduler state,
-        global_step, current curriculum phase.
+        Restores: policy weights, M3 projection weights, optimizer state,
+        scheduler state, global_step, current curriculum phase — and points
+        the collector at that phase's tiers (restarting in-flight episodes).
 
         Parameters
         ----------
@@ -375,11 +383,27 @@ class PPOTrainer:
         """
         ckpt = self.load_checkpoint(path)
         self._policy.load_state_dict(ckpt.policy_state_dict)
+        if ckpt.projection_state_dict is not None:
+            self._llm.projection.load_state_dict(ckpt.projection_state_dict)
+        else:
+            logger.warning(
+                "Checkpoint %s has no projection weights (written before "
+                "projection co-training). Keeping the seeded initial projection.",
+                path,
+            )
         self._optimizer.load_state_dict(ckpt.optimizer_state_dict)
         if ckpt.scheduler_state_dict is not None:
             self._scheduler.load_state_dict(ckpt.scheduler_state_dict)
         self._global_step = ckpt.step
         self._current_phase = CurriculumPhase(ckpt.curriculum_phase)
+        # The collector was built with Phase-1 tiers; without this a run
+        # resumed in Phase 2/3 keeps sampling tiers 1-2 until the next
+        # phase boundary (or forever, if resumed in Phase 3).
+        if self._curriculum is not None:
+            self._collector.set_allowed_tiers(
+                self._curriculum.allowed_tiers(self._current_phase)
+            )
+        self._collector.reset_all()
         logger.info(
             "Resumed from %s at step %d, curriculum phase %d.",
             path, self._global_step, self._current_phase
@@ -398,23 +422,72 @@ class PPOTrainer:
 
     def _fill_gae(self, batch: RolloutBatch) -> None:
         """
-        Call compute_gae() for each episode segment in the batch to fill
-        batch.advantages and batch.returns.
+        Fill batch.advantages and batch.returns by calling compute_gae()
+        separately for each env's trajectory.
 
-        This is a scaffold wrapper — the actual GAE is in ppo_stubs.py
-        (architect implements).
+        The collector fills the buffer round-robin across N envs
+        (env0, env1, ..., envN-1, env0, ...), so consecutive buffer entries
+        belong to DIFFERENT episodes.  GAE must therefore run per env_id; on
+        the flat buffer, V(s_{t+1}) would come from another env's episode
+        and terminal rewards would never be credited to the actions that led
+        to them.
+
+        Each env's last transition bootstraps from V(current state) when it
+        is not terminal (the rollout cut the episode mid-way), else 0.
+
+        Returns are V(s) + raw advantages — the value-head target.  Advantage
+        normalisation happens per minibatch inside compute_ppo_loss, AFTER
+        returns are formed (normalising first would put the value targets
+        on the wrong scale).
         """
         T = batch.rewards.shape[0]
-        rewards = batch.rewards.tolist()
-        values = batch.values.tolist() + [0.0]   # bootstrap with 0 at end
-        dones = batch.dones.tolist()
+        env_ids = (
+            batch.env_ids if batch.env_ids is not None
+            else torch.zeros(T, dtype=torch.int64)
+        )
+        advantages = torch.zeros(T, dtype=torch.float32)
 
-        advantages = compute_gae(rewards, values, dones, self._gamma, self._lam)
-        adv_tensor = torch.tensor(advantages, dtype=torch.float32)
-        # Normalise advantages for training stability.
-        adv_tensor = (adv_tensor - adv_tensor.mean()) / (adv_tensor.std() + 1e-8)
-        batch.advantages = adv_tensor
-        batch.returns = batch.values + adv_tensor   # V(s) + A(s,a)
+        for env_id in torch.unique(env_ids).tolist():
+            idx = (env_ids == env_id).nonzero(as_tuple=True)[0]   # time-ordered
+            dones = batch.dones[idx].tolist()
+            last_value = 0.0
+            if not dones[-1] and batch.bootstrap_values is not None:
+                last_value = float(batch.bootstrap_values[env_id])
+            env_adv = compute_gae(
+                batch.rewards[idx].tolist(),
+                batch.values[idx].tolist() + [last_value],
+                dones,
+                self._gamma,
+                self._lam,
+            )
+            advantages[idx] = torch.tensor(env_adv, dtype=torch.float32)
+
+        batch.advantages = advantages
+        batch.returns = batch.values + advantages   # V(s) + A(s,a), unnormalised
+
+    def _with_projected_states(self, mb: RolloutBatch) -> RolloutBatch:
+        """
+        Re-apply M3's projection to the stored pooled LLM features so the
+        semantic slice of the state carries gradients into the projection.
+
+        At the first minibatch of an update the result equals the stored
+        state exactly (same projection weights), so PPO's probability ratio
+        starts at 1 as it should.  If pooled features are unavailable or the
+        projection is frozen (ablation), the stored states are used as-is.
+        """
+        if mb.pooled is None or self._freeze_projection:
+            return mb
+        semantic = self._llm.project(mb.pooled).to(self._device)   # (B, 384), grad
+        s, e = SEMANTIC_RANGE
+        states = torch.cat(
+            [
+                mb.states[:, :s].to(self._device),
+                semantic,
+                mb.states[:, e:].to(self._device),
+            ],
+            dim=1,
+        )
+        return dataclasses.replace(mb, states=states)
 
     def _run_ppo_update(self, batch: RolloutBatch) -> None:
         """
@@ -422,7 +495,6 @@ class PPOTrainer:
 
         Calls compute_ppo_loss() (architect stub) for each minibatch.
         """
-        buffer_obj = RolloutBuffer(capacity=len(batch.states))
         total_policy_loss = 0.0
         total_value_loss = 0.0
         total_entropy = 0.0
@@ -436,12 +508,13 @@ class PPOTrainer:
                 self._optimizer.zero_grad()
                 entropy_coef = self._current_entropy_coef()
                 loss_out = compute_ppo_loss(
-                    mb, self._policy, self._clip_range,
-                    self._value_coef, entropy_coef
+                    self._with_projected_states(mb), self._policy,
+                    self._clip_range, self._value_coef, entropy_coef
                 )
                 loss_out.total_loss.backward()
-                grad_norm = nn.utils.clip_grad_norm_(
-                    self._policy.parameters(), self._max_grad_norm
+                # Clip policy AND projection gradients together.
+                nn.utils.clip_grad_norm_(
+                    self._trainable_params, self._max_grad_norm
                 )
                 self._optimizer.step()
                 total_policy_loss += loss_out.policy_loss.item()

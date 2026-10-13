@@ -313,3 +313,93 @@ However, once running on the target remote training environment (Kaggle T4 GPU) 
 actual BitsAndBytes 4-bit NF4 quantization and float16 fused attention kernels
 enabled, the numerical noise profile and magnitude may differ. The tolerance must be
 re-checked on Kaggle, not assumed identical to CPU.
+## ADR-15: Per-env GAE using side-arrays in RolloutBuffer
+**Date:** 2026-10-13
+**Decision:** `RolloutBuffer.add()` takes an `env_id` (and `pooled`, see ADR-16).
+`PPOTrainer._fill_gae()` runs `compute_gae()` separately on each env's
+time-ordered transitions, bootstrapping a cut-off trajectory from
+`V(current state)` (computed by the collector after each rollout). Returns are
+`values + raw advantages`; advantages are normalised only inside
+`compute_ppo_loss`, per minibatch.
+**Context:** The collector fills the buffer round-robin (env0, env1, …,
+envN-1, env0, …). The original `_fill_gae` ran GAE over the flat buffer, so
+`V(s_{t+1})` came from a different env's episode and the ±10 terminal reward
+was almost never credited to the tool calls that led to it. It also built
+returns from *normalised* advantages, putting value targets on the wrong
+scale. The first Kaggle run (12 updates, checkpoints up to step 24576) was
+trained with both bugs.
+**Alternatives considered:**
+- Add `env_id` to `EpisodeStep` (rejected: it's a locked shared type).
+- Infer env from index (`k % n_envs`) (rejected: silently breaks if the
+  collector's stepping order ever changes).
+**Consequence:** The buffer-to-env mapping is explicit and covered by tests
+(`tests/policy/test_ppo_fixes.py`, hand-computed GAE). One extra batched
+encode + policy forward per rollout to get the bootstrap values (negligible
+next to 2048 generate() calls).
+
+## ADR-16: Projection co-training through stored pooled features
+**Date:** 2026-10-13
+**Decision:** M3 gains two additive public methods:
+`encode_pooled_batch()` (frozen-LLM mean-pooled hidden states, no grad) and
+`project()` (applies the trainable projection, *with* grad).
+`encode_batch()` is now `project(encode_pooled_batch())` under `no_grad`.
+The collector stores each transition's pooled features; the PPO update
+re-applies `project()` to them (`PPOTrainer._with_projected_states`) so the
+loss back-propagates into the projection. The projection is always float32
+and seeded with a local `torch.Generator(42)`; checkpoints now include
+`projection_state_dict` (and `wandb_run_id`), and evaluation loads it.
+**Context:** The MSD's "co-adapted projection" was never actually trained:
+`encode()` returned detached tensors and states were stored as numpy, so the
+projection received no gradient (confirmed: the Kaggle checkpoints hold Adam
+state for the 12 policy tensors and 0 for the 2 projection tensors), and
+checkpoints didn't save it. The `--freeze-projection` ablation was therefore
+identical to the main run.
+**Alternatives considered:**
+- Re-run the 7B forward pass inside the PPO update (rejected: 10 epochs ×
+  2048 samples of 7B forward passes — far too slow on a T4).
+- Store token ids and recompute (rejected: same cost).
+- Keep the projection frozen and document it (rejected by the architect,
+  2026-10-13 — co-training is the project's headline design choice).
+**Consequence:** ~14 KB/transition of extra CPU memory (3584 floats for 7B;
+~29 MB per 2048-step rollout). Initial projection values differ from earlier
+runs (float32 init instead of float16), so pre-fix checkpoints should not be
+resumed for the new run. Global torch RNG is no longer reset by
+`LLMInterface()`.
+
+## ADR-17: One shared answer grader for reward and evaluation
+**Date:** 2026-10-13
+**Decision:** `atar/env/answer_matching.py::is_answer_correct()` is used by
+both `ATAREnv._compute_accuracy_reward()` and `atar.evaluation`. Numeric
+truths compare the *last* number in the answer (tolerance rel 1e-6 / abs
+0.005); short text truths (≤3 content words) need every content word as a
+whole word; long reference sentences need ≥60% content-word recall or an
+answer whose content words are all in the truth.
+**Context:** The previous grader used bidirectional substring matching:
+`"6"` matched `61559.0`, `"I do not know"` matched `no`, any answer containing
+"2" matched the 9 test tasks whose truth is `2` — while
+`"2660 + 58899 = 61559"` was marked wrong. The env and eval each had a copy.
+**Alternatives considered:**
+- Exact match only (rejected: Tier 1 search / Tier 4 truths are whole
+  abstract sentences; "Paris" must match "The capital of France is Paris…").
+- LLM-as-judge (rejected: adds a 7B generate() per episode during training).
+- First number instead of last (rejected: "employee #2 earns 95000" pattern).
+**Consequence:** The training reward changed (approved by the architect), so
+pre-fix checkpoints were trained against a different reward. Known
+limitation: an answer giving the result first and then other numbers
+("61559 (2660 + 58899)") is graded on 58899 — documented in tests.
+
+## ADR-18: Evaluation efficiency metric and resume fingerprints
+**Date:** 2026-10-13
+**Decision:** `efficiency = accuracy / (1 + avg_tool_calls)`. Each agent's
+per-task file gets a `.meta.json` fingerprint (model name, seed, grader
+version, checkpoint SHA-256 for `atar`); resuming into a directory whose
+fingerprint differs, or that has results but no fingerprint, raises.
+**Context:** The original `accuracy / avg_tool_calls` gave 0 to an agent that
+answers correctly without tools and explodes as tool calls → 0. Resume
+previously skipped any task id already on disk regardless of which
+checkpoint produced it, so evaluating checkpoint B into A's directory would
+silently report A's results.
+**Alternatives considered:** Keep the old ratio and special-case zero tools
+(rejected: still discontinuous near zero).
+**Consequence:** Old `eval_smoke*/` directories can't be resumed (no
+fingerprint) — use a fresh `--out-dir`.

@@ -33,3 +33,5 @@ dist/
 htmlcov/
 *.egg-info/
 wandb/
+# Archived artifacts from the first (pre-2026-10-13-fix) Kaggle run and local smoke tests
+old_run_artifacts/

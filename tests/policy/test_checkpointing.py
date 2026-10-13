@@ -273,3 +273,81 @@ def test_stop_after_updates_and_resume(
     assert trainer2._updates_this_invocation == 1, "Second invocation should stop after 1 update"
     expected_step_after_2_updates = 10
     assert trainer2._global_step == expected_step_after_2_updates, "Step count should continue instead of restarting"
+
+
+def test_checkpoint_round_trips_projection_and_update_changes_it(
+    llm: LLMInterface, data_dir: Path, tmp_path: Path
+) -> None:
+    """
+    Projection co-training end-to-end (stand-in model): one real PPO update
+    must change the projection weights, the checkpoint must contain them, and
+    restoring must load them back into the LLM's projection.
+    """
+    before = llm.projection.weight.detach().clone()
+    ckpt_dir = tmp_path / "ckpts_proj"
+    trainer = PPOTrainer(
+        policy=ATARPolicy(), llm=llm, data_dir=str(data_dir), n_envs=2,
+        rollout_steps=8, total_steps=50, batch_size=4, epochs_per_update=2,
+        checkpoint_dir=str(ckpt_dir), wandb_mode="offline", stop_after_updates=1,
+    )
+    trainer.train()
+    after = llm.projection.weight.detach().clone()
+    assert not torch.equal(before, after), "PPO update did not change the projection"
+
+    ckpt = PPOTrainer.load_checkpoint(ckpt_dir / "checkpoint_step_8.pt")
+    assert ckpt.projection_state_dict is not None
+    assert torch.equal(ckpt.projection_state_dict["weight"].cpu(), after.cpu())
+    # Adam state exists for the projection params too (was 0 entries before the fix).
+    assert len(ckpt.optimizer_state_dict["state"]) == len(list(ATARPolicy().parameters())) + 2
+
+    # Scramble, then restore -> weights come back.
+    with torch.no_grad():
+        llm.projection.weight.add_(1.0)
+    trainer2 = PPOTrainer(
+        policy=ATARPolicy(), llm=llm, data_dir=str(data_dir), n_envs=2,
+        rollout_steps=8, total_steps=50, checkpoint_dir=str(ckpt_dir),
+        wandb_mode="offline",
+    )
+    trainer2.restore_from_checkpoint(ckpt_dir / "checkpoint_step_8.pt")
+    assert torch.equal(llm.projection.weight.detach().cpu(), after.cpu())
+
+
+def test_resume_applies_curriculum_tiers_immediately(
+    llm: LLMInterface, data_dir: Path, tmp_path: Path
+) -> None:
+    """
+    Regression: a run resumed inside Phase 2/3 used to keep sampling Phase-1
+    tiers [1, 2], because no phase *transition* happens after the restore.
+    """
+    ckpt_dir = tmp_path / "ckpts_tiers"
+    trainer1 = PPOTrainer(
+        policy=ATARPolicy(), llm=llm, data_dir=str(data_dir), n_envs=2,
+        rollout_steps=5, total_steps=50, checkpoint_dir=str(ckpt_dir),
+        wandb_mode="offline",
+    )
+    trainer1._global_step = 40                       # 80% -> Phase 3
+    trainer1._current_phase = CurriculumPhase.PHASE_3
+    ckpt_path = trainer1.save_checkpoint(tag="phase3")
+
+    trainer2 = PPOTrainer(
+        policy=ATARPolicy(), llm=llm, data_dir=str(data_dir), n_envs=2,
+        rollout_steps=5, total_steps=50, checkpoint_dir=str(ckpt_dir),
+        wandb_mode="offline",
+    )
+    assert trainer2._collector._allowed_tiers == [1, 2]   # fresh trainer: Phase 1
+    trainer2.restore_from_checkpoint(ckpt_path)
+    assert trainer2._collector._allowed_tiers == [1, 2, 3, 4, 5]
+
+
+def test_checkpoint_stores_wandb_run_id(
+    llm: LLMInterface, data_dir: Path, tmp_path: Path
+) -> None:
+    """The run id is saved so a new Kaggle session can continue the same W&B run."""
+    trainer = PPOTrainer(
+        policy=ATARPolicy(), llm=llm, data_dir=str(data_dir), n_envs=2,
+        rollout_steps=5, total_steps=20, checkpoint_dir=str(tmp_path / "ck"),
+        wandb_mode="offline",
+    )
+    ckpt = PPOTrainer.load_checkpoint(trainer.save_checkpoint(tag="wb"))
+    assert ckpt.wandb_run_id == trainer._run.id
+    trainer._run.finish()

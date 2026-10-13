@@ -47,9 +47,7 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
-from pathlib import Path
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -213,6 +211,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # ── Weights & Biases ──────────────────────────────────────────────────
     p.add_argument(
+        "--wandb-run-id",
+        type=str,
+        default=None,
+        help=(
+            "Log into this existing W&B run. When omitted with --resume-from, "
+            "the run id stored in the checkpoint is used, so every Kaggle "
+            "session of one training run lands in the same W&B run."
+        ),
+    )
+    p.add_argument(
         "--wandb-project",
         type=str,
         default="atar",
@@ -281,7 +289,6 @@ def main() -> int:
         logger.info("Resuming from checkpoint: %s", args.resume_from)
 
     # ── Imports (deferred to keep --help fast) ───────────────────────────
-    import torch
     from atar.llm.llm_interface import LLMInterface
     from atar.policy import ATARPolicy, PPOTrainer
 
@@ -292,6 +299,13 @@ def main() -> int:
 
     # ── Build policy ─────────────────────────────────────────────────────
     policy = ATARPolicy()
+
+    # ── W&B run id (continue the same run across sessions) ────────────────
+    wandb_run_id = args.wandb_run_id
+    if wandb_run_id is None and args.resume_from is not None:
+        wandb_run_id = PPOTrainer.load_checkpoint(args.resume_from).wandb_run_id
+        if wandb_run_id:
+            logger.info("Continuing W&B run id from checkpoint: %s", wandb_run_id)
 
     # ── Build trainer ─────────────────────────────────────────────────────
     trainer = PPOTrainer(
@@ -321,6 +335,7 @@ def main() -> int:
         no_curriculum=args.no_curriculum,
         freeze_projection=args.freeze_projection,
         stop_after_updates=args.stop_after_updates,
+        wandb_run_id=wandb_run_id,
     )
 
     # ── Resume from checkpoint if requested ───────────────────────────────

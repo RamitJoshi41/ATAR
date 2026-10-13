@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import random
 from pathlib import Path
 from typing import Any
@@ -49,8 +48,8 @@ from atar.shared.shared_types import (
     TOOL_HISTORY_RANGE,
     OUTCOME_EMBED_RANGE,
     BUDGET_RANGE,
-    PADDING_RANGE,
 )
+from atar.env.answer_matching import is_answer_correct
 from atar.llm import LLMInterface
 from atar.tools import execute_tool
 from atar.translator import translate, validate
@@ -491,6 +490,12 @@ class ATAREnv(gymnasium.Env):
             "task_id": self._task.id,
             "task_tier": self._task.tier,
             "action": action.name,
+            # Episode-level bookkeeping so callers (M7 baselines, evaluation)
+            # don't need to read private env attributes.
+            "final_answer": self._final_answer,
+            "correct": terminated and acc_accuracy == _ACCURACY_CORRECT,
+            "had_tool_failure": self._had_tool_failure,
+            "tool_call_count": self._tool_call_count,
         }
 
         return next_state, reward, terminated, truncated, info
@@ -591,21 +596,9 @@ class ATAREnv(gymnasium.Env):
         if self._final_answer is None or self._task is None:
             return _ACCURACY_TRUNCATED
 
-        answer = str(self._final_answer).strip().lower()
-        truth = str(self._task.ground_truth).strip().lower()
-
-        # Flexible matching: exact match or truth contained in answer or vice versa
-        if answer == truth or truth in answer or answer in truth:
+        # Shared with atar.evaluation so train and eval grade identically.
+        if is_answer_correct(self._final_answer, self._task.ground_truth):
             return _ACCURACY_CORRECT
-        # Numeric match: try to parse both as floats
-        try:
-            a_val = float(answer.replace(",", ""))
-            t_val = float(truth.replace(",", ""))
-            if math.isclose(a_val, t_val, rel_tol=1e-6):
-                return _ACCURACY_CORRECT
-        except ValueError:
-            pass
-
         return _ACCURACY_INCORRECT
 
     def _is_redundant_call(
