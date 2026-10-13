@@ -3,10 +3,11 @@
 Copy each block into its own notebook cell. Notebook settings:
 **Accelerator: GPU T4 x1**, **Internet: on**, **Persistence: Files only**.
 
-Timing below is an estimate built from the M7 MSD's measured numbers
-(~2.7 s per `generate()` + ~0.1 s encode on a T4 with Qwen2.5-7B, i.e.
-~2.9 s per env step, because generation is still sequential). Check the first
-session's logs and adjust `--stop-after-updates`.
+Timing below uses the throughput measured in the first run's W&B export
+(2026-09-28 → 10-01): **4.0–4.9 s per env step** on a T4 with Qwen2.5-7B
+(e.g. 8,192 steps in 33,520 s), because generation is still sequential.
+The M7 spec's 2.9 s/step estimate was too optimistic. Re-check against the
+pilot's runtime and adjust `--stop-after-updates`.
 
 ---
 
@@ -31,7 +32,7 @@ os.environ["WANDB_API_KEY"] = UserSecretsClient().get_secret("WANDB_API_KEY")
 
 ## 3a. Start a NEW training run (first session only)
 
-**Recommended: run a ~2.5 h pilot first** — the same command as below but
+**Recommended: run a ~4 h pilot first** — the same command as below but
 with `--stop-after-updates 3`. Before spending the rest of the week's quota,
 check the W&B charts in section 4: if the action mix collapses to a single
 action or `success_rate` doesn't move, stop and debug. If it looks healthy,
@@ -44,22 +45,25 @@ with the GAE/returns/projection/grader bugs fixed on 2026-10-13
 ```python
 !python scripts/train.py \
     --model-name Qwen/Qwen2.5-7B-Instruct --device cuda \
-    --total-steps 30000 --rollout-steps 1024 \
+    --total-steps 24576 --rollout-steps 1024 \
     --checkpoint-dir /kaggle/working/checkpoints --checkpoint-interval 1 \
-    --stop-after-updates 12 \
+    --stop-after-updates 7 \
     --wandb-project atar-training --wandb-mode online
 ```
 
 Why these numbers:
-- `--rollout-steps 1024` (MSD default 2048): one update ≈ 1024 × 2.9 s ≈ 50 min,
-  so you get ~12 policy updates per 12 h session instead of ~6. More, smaller
-  updates is the better trade when the whole budget is only ~30k steps.
-  (Logged in W&B config; the MSD allows retuning if logged.)
+- `--rollout-steps 1024` (MSD default 2048): one update ≈ 1024 × 4.0–4.9 s
+  ≈ 70–85 min, so a session gets ~7 policy updates instead of ~3–4. More,
+  smaller updates is the better trade when the whole budget is ~25k steps
+  (the first run got only 12 updates in total). Logged in W&B config; the
+  MSD allows retuning if logged.
 - `--checkpoint-interval 1`: a checkpoint after every update, so a session
-  cut-off loses at most ~50 min.
-- `--stop-after-updates 12`: exits cleanly at ~10 h, before Kaggle's 12 h cap.
-- `--total-steps 30000`: ~30 updates ≈ 3 sessions ≈ one week of Kaggle GPU quota.
-  Curriculum phases switch at 9,000 and 21,000 steps.
+  cut-off loses at most one update (~85 min).
+- `--stop-after-updates 7`: exits cleanly at ~8–10 h, before Kaggle's 12 h cap
+  (model loading adds ~10 min).
+- `--total-steps 24576`: same budget as the first run, but 24 updates instead
+  of 12; ≈ 28–34 GPU-hours ≈ 4 sessions, a little over one week of Kaggle's
+  ~30 h/week quota. Curriculum phases switch at steps 7,372 and 17,203.
 
 When the cell finishes, make sure `/kaggle/working/checkpoints` survives the
 session the same way you carried checkpoints between notebooks before
@@ -79,9 +83,9 @@ from the checkpoint, so all sessions land in the **same** W&B run.
 ```python
 !python scripts/train.py \
     --model-name Qwen/Qwen2.5-7B-Instruct --device cuda \
-    --total-steps 30000 --rollout-steps 1024 \
+    --total-steps 24576 --rollout-steps 1024 \
     --checkpoint-dir /kaggle/working/checkpoints --checkpoint-interval 1 \
-    --stop-after-updates 12 \
+    --stop-after-updates 7 \
     --wandb-project atar-training --wandb-mode online \
     --resume-from /kaggle/input/<PREVIOUS-NOTEBOOK>/checkpoints/checkpoint_step_<N>.pt
 ```
@@ -98,7 +102,7 @@ from the checkpoint, so all sessions land in the **same** W&B run.
 | `mean_episode_reward` | trends up | trends down / stuck very negative (invalid-param penalties) |
 | `entropy` | decreases slowly | drops to ~0 in the first few updates |
 | `value_loss` | falls then plateaus | grows steadily |
-| `curriculum_phase` | 1 → 2 at step 9k, 2 → 3 at 21k | wrong phase after a resume |
+| `curriculum_phase` | 1 → 2 at step ~7.4k, 2 → 3 at ~17.2k (first update boundary after each) | wrong phase after a resume |
 
 ## 5. Evaluate a checkpoint (after training, or any time)
 
