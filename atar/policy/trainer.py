@@ -138,6 +138,7 @@ class PPOTrainer:
         self._device = device
         self._total_steps = total_steps
         self._rollout_steps = rollout_steps
+        self._lr_min = lr_min
         self._batch_size = batch_size
         self._epochs_per_update = epochs_per_update
         self._gamma = gamma
@@ -310,11 +311,62 @@ class PPOTrainer:
                 self._run.finish()
                 return
 
-        # Final checkpoint
-        self.save_checkpoint(tag="final")
+        # Final checkpoint ("final" for the planned run; an extension keeps
+        # that file and writes final_<step> instead).
+        self.save_checkpoint(
+            tag="final" if stop_at == self._total_steps else f"final_{stop_at}"
+        )
         logger.info("Training complete at step %d.", self._global_step)
         self._run.summary["final_step"] = self._global_step
         self._run.finish()
+
+    # ------------------------------------------------------------------
+    # Extension beyond the planned run
+    # ------------------------------------------------------------------
+
+    def start_extension(self, extend_to: int, lr: float) -> None:
+        """
+        Prepare to keep training a FINISHED run up to ``extend_to`` steps.
+
+        Call after restore_from_checkpoint(), then train(max_steps=extend_to).
+        The trainer must be built with the ORIGINAL total_steps, so the
+        curriculum boundaries are unchanged: every extra step is past the
+        Phase-3 boundary and samples all 5 tiers.  The entropy coefficient
+        stays at its end value.  The learning rate restarts at ``lr`` and
+        cosine-decays to lr_min over the extra updates.
+
+        Resuming in the middle of an extension (step > total_steps) keeps the
+        extension's scheduler state that restore_from_checkpoint() loaded, so
+        repeating the same command in every session is safe.
+        """
+        if extend_to <= self._total_steps:
+            raise ValueError(
+                f"extend_to ({extend_to}) must exceed the planned total_steps "
+                f"({self._total_steps})"
+            )
+        if self._global_step < self._total_steps:
+            raise RuntimeError(
+                f"The planned run is not finished (step {self._global_step} of "
+                f"{self._total_steps}); resume it normally before extending."
+            )
+        if self._global_step > self._total_steps:
+            logger.info(
+                "Resuming an extension at step %d (scheduler state restored).",
+                self._global_step,
+            )
+            return
+
+        extra_updates = max(1, -(-(extend_to - self._total_steps) // self._rollout_steps))
+        for group in self._optimizer.param_groups:
+            group["lr"] = lr
+            group["initial_lr"] = lr
+        self._scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self._optimizer, T_max=extra_updates, eta_min=self._lr_min
+        )
+        logger.info(
+            "Extending from step %d to %d: %d more updates, LR %.1e -> %.1e, all tiers.",
+            self._global_step, extend_to, extra_updates, lr, self._lr_min,
+        )
 
     # ------------------------------------------------------------------
     # Checkpoint save / load

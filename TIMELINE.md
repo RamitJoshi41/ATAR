@@ -213,3 +213,21 @@ Template per entry:
   with the bugs and against the old reward).
 - Next: commit + push; Kaggle pilot (3 updates) → check W&B → full run →
   200-task evaluation vs baselines.
+
+## 2026-10-13 (later) — Step budget, run extension, demo plan
+- Decided (architect delegated): plan 24,576 steps / 1,024-step rollouts;
+  extend only if the held-out learning curve is still rising (ADR-19).
+  Gemini's "100k steps needed" was the train.py default, not evidence.
+- Built: `--extend-to` / `--extend-lr` in `scripts/train.py`,
+  `PPOTrainer.start_extension()`; final checkpoint of an extension is
+  `checkpoint_final_<N>.pt`. 3 new tests (extension end-to-end, mid-extension
+  resume keeps the schedule, refusal on unfinished runs).
+- Checked: NVIDIA NIM still lists qwen2.5-7b-instruct as a trial endpoint
+  (page last updated 2025-05-22; live status not verified without a key),
+  but it returns text only — the policy needs hidden states, so the demo
+  will replay recorded episodes per checkpoint (+ optional live mode on a
+  GPU host).
+- KAGGLE.md: measured 4.0–4.9 s/step (first run's W&B), 7 updates/session,
+  ~4 h pilot, extension section.
+- Next: push; Kaggle pilot; then M8 demo (replay recorder + version dropdown
+  + held-out learning curve).

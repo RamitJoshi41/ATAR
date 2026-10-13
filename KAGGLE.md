@@ -93,6 +93,37 @@ from the checkpoint, so all sessions land in the **same** W&B run.
 `--total-steps` and `--rollout-steps` must be the same in every session
 (they define the curriculum boundaries and the LR schedule).
 
+**Keep every checkpoint** (one per update, ~20 MB each with the projection
+and optimizer state). They are the policy "versions" for the learning curve
+and the demo's version dropdown.
+
+## 3c. Decide whether to extend (after the planned 24,576 steps)
+
+Evaluate a few checkpoints on the held-out tasks (section 5, e.g. steps
+6,144 / 12,288 / 18,432 / final) and look at held-out success vs. step:
+
+- **Still clearly rising at the end** → extend. All extra steps use all 5
+  tiers; the LR restarts at 1e-4 and decays to 1e-5 over the extra updates.
+- **Flat over the last third** → stop; more steps won't help, and you save
+  1–3 weeks of quota.
+
+Extension command (the same command in every session of the extension;
+keep `--total-steps 24576` — it's the original plan, not the new target):
+
+```python
+!python scripts/train.py \
+    --model-name Qwen/Qwen2.5-7B-Instruct --device cuda \
+    --total-steps 24576 --rollout-steps 1024 --extend-to 49152 \
+    --checkpoint-dir /kaggle/working/checkpoints --checkpoint-interval 1 \
+    --stop-after-updates 7 \
+    --wandb-project atar-training --wandb-mode online \
+    --resume-from /kaggle/input/<PREVIOUS-NOTEBOOK>/checkpoints/<newest checkpoint>.pt
+```
+
+The first extension session resumes from `checkpoint_final.pt`; later ones
+from the newest `checkpoint_step_*.pt`. The extension ends with
+`checkpoint_final_49152.pt` (the planned run's `checkpoint_final.pt` is kept).
+
 ## 4. What to watch in W&B
 
 | Chart | Healthy | Problem |

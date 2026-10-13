@@ -17,10 +17,8 @@ verify on the training GPU with a real API key.
 from __future__ import annotations
 
 import json
-import os
 import pytest
 import torch
-import numpy as np
 from pathlib import Path
 
 from atar.llm.llm_interface import LLMInterface
@@ -191,7 +189,6 @@ def test_wandb_offline_run_created(
     architect to verify on the training GPU with a real API key and
     mode="online". This test only confirms the offline path is wired.
     """
-    import wandb
 
     policy = ATARPolicy()
     trainer = PPOTrainer(
@@ -351,3 +348,79 @@ def test_checkpoint_stores_wandb_run_id(
     ckpt = PPOTrainer.load_checkpoint(trainer.save_checkpoint(tag="wb"))
     assert ckpt.wandb_run_id == trainer._run.id
     trainer._run.finish()
+
+
+def test_extension_continues_finished_run_with_all_tiers_and_fresh_lr(
+    llm: LLMInterface, data_dir: Path, tmp_path: Path
+) -> None:
+    """
+    --extend-to: a finished 10-step plan (2 updates of 5) is extended to 20
+    steps.  Extra steps run in Phase 3 (all tiers), the LR restarts at the
+    extension LR and decays to lr_min over the 2 extra updates, and the
+    planned run's checkpoint_final.pt is not overwritten.
+    """
+    ckpt_dir = tmp_path / "ckpts_ext"
+    common = dict(
+        llm=llm, data_dir=str(data_dir), n_envs=2, rollout_steps=5,
+        total_steps=10, batch_size=5, epochs_per_update=1,
+        checkpoint_dir=str(ckpt_dir), checkpoint_interval=1, wandb_mode="offline",
+    )
+    PPOTrainer(policy=ATARPolicy(), **common).train()
+    final_path = ckpt_dir / "checkpoint_final.pt"
+    final_bytes = final_path.read_bytes()
+
+    trainer = PPOTrainer(policy=ATARPolicy(), **common)
+    trainer.restore_from_checkpoint(final_path)
+    trainer.start_extension(20, lr=1e-4)
+    assert trainer._optimizer.param_groups[0]["lr"] == pytest.approx(1e-4)
+    trainer.train(max_steps=20)
+
+    assert trainer._global_step == 20
+    assert trainer._current_phase == CurriculumPhase.PHASE_3
+    assert trainer._collector._allowed_tiers == [1, 2, 3, 4, 5]
+    assert trainer._optimizer.param_groups[0]["lr"] == pytest.approx(1e-5)  # lr_min
+    assert (ckpt_dir / "checkpoint_final_20.pt").exists()
+    assert final_path.read_bytes() == final_bytes, "extension overwrote the planned run's final checkpoint"
+
+
+def test_extension_resume_mid_way_keeps_its_schedule(
+    llm: LLMInterface, data_dir: Path, tmp_path: Path
+) -> None:
+    """Repeating the same --extend-to command in a new session must not restart the LR."""
+    ckpt_dir = tmp_path / "ckpts_ext_mid"
+    common = dict(
+        llm=llm, data_dir=str(data_dir), n_envs=2, rollout_steps=5,
+        total_steps=10, batch_size=5, epochs_per_update=1,
+        checkpoint_dir=str(ckpt_dir), checkpoint_interval=1, wandb_mode="offline",
+    )
+    PPOTrainer(policy=ATARPolicy(), **common).train()
+
+    session1 = PPOTrainer(policy=ATARPolicy(), stop_after_updates=1, **common)
+    session1.restore_from_checkpoint(ckpt_dir / "checkpoint_final.pt")
+    session1.start_extension(30, lr=1e-4)
+    session1.train(max_steps=30)                        # one extension update, then stop
+    lr_after_one = session1._optimizer.param_groups[0]["lr"]
+    assert session1._global_step == 15
+    assert lr_after_one < 1e-4                          # decayed one step
+
+    session2 = PPOTrainer(policy=ATARPolicy(), **common)
+    session2.restore_from_checkpoint(ckpt_dir / "checkpoint_step_15.pt")
+    session2.start_extension(30, lr=1e-4)               # same command again
+    assert session2._optimizer.param_groups[0]["lr"] == pytest.approx(lr_after_one)
+    assert session2._scheduler.T_max == 4               # 20 extra steps / 5 per update
+
+
+def test_extension_refuses_unfinished_run(
+    llm: LLMInterface, data_dir: Path, tmp_path: Path
+) -> None:
+    trainer = PPOTrainer(
+        policy=ATARPolicy(), llm=llm, data_dir=str(data_dir), n_envs=2,
+        rollout_steps=5, total_steps=50, checkpoint_dir=str(tmp_path / "ck"),
+        wandb_mode="offline",
+    )
+    trainer._global_step = 20
+    with pytest.raises(RuntimeError, match="not finished"):
+        trainer.start_extension(100, lr=1e-4)
+    trainer._global_step = 50
+    with pytest.raises(ValueError):
+        trainer.start_extension(40, lr=1e-4)

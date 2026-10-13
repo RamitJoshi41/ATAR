@@ -203,6 +203,23 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument(
+        "--extend-to",
+        type=int,
+        default=None,
+        help=(
+            "Continue a FINISHED run (requires --resume-from) up to this many "
+            "total steps. Keep --total-steps at the original plan: extra steps "
+            "use all tiers, and the LR restarts at --extend-lr and decays to "
+            "--lr-min. Safe to repeat in every session of the extension."
+        ),
+    )
+    p.add_argument(
+        "--extend-lr",
+        type=float,
+        default=1e-4,
+        help="Learning rate at the start of an --extend-to extension.",
+    )
+    p.add_argument(
         "--stop-after-updates",
         type=int,
         default=None,
@@ -287,6 +304,9 @@ def main() -> int:
     logger.info("Total steps: %d", args.total_steps)
     if args.resume_from:
         logger.info("Resuming from checkpoint: %s", args.resume_from)
+    if args.extend_to is not None and args.resume_from is None:
+        logger.error("--extend-to requires --resume-from (a checkpoint of the finished run).")
+        return 1
 
     # ── Imports (deferred to keep --help fast) ───────────────────────────
     from atar.llm.llm_interface import LLMInterface
@@ -343,8 +363,12 @@ def main() -> int:
         logger.info("Restoring from checkpoint: %s", args.resume_from)
         trainer.restore_from_checkpoint(args.resume_from)
 
+    # ── Extend a finished run, if requested ───────────────────────────────
+    if args.extend_to is not None:
+        trainer.start_extension(args.extend_to, lr=args.extend_lr)
+
     # ── Train ─────────────────────────────────────────────────────────────
-    trainer.train()
+    trainer.train(max_steps=args.extend_to)
     return 0
 
 

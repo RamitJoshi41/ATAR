@@ -403,3 +403,32 @@ silently report A's results.
 (rejected: still discontinuous near zero).
 **Consequence:** Old `eval_smoke*/` directories can't be resumed (no
 fingerprint) — use a fresh `--out-dir`.
+
+## ADR-19: Step budget = 24,576 planned + optional extension; demo = recorded replays
+**Date:** 2026-10-13
+**Decision:** Retrain with `--total-steps 24576 --rollout-steps 1024` (24
+updates). After it finishes, evaluate checkpoints on the held-out set; only
+if held-out success is still rising, continue with
+`--extend-to <N>` (`PPOTrainer.start_extension`): the curriculum boundaries
+stay those of the original plan (so every extra step samples all 5 tiers),
+the entropy coefficient stays at its end value, and the LR restarts at
+`--extend-lr` (1e-4) with a fresh cosine decay to 1e-5 over the extra
+updates. The M8 demo will replay recorded episodes per checkpoint
+("version"), with an optional live mode on a GPU host.
+**Context:** Gemini had told the architect 100k steps were needed; that
+figure is `train.py`'s default, not a measurement. At the measured
+4.0–4.9 s/step, 100k steps ≈ 125 GPU-hours ≈ 4+ weeks of Kaggle quota.
+`--total-steps` fixes the curriculum and LR schedule up front, so a long
+plan can't simply be stopped early (Phase 3 / tier 5 would be skipped).
+Hosted APIs such as NVIDIA NIM return text only, but the policy's state
+needs the 7B model's hidden states, so the policy cannot run on NIM alone.
+**Alternatives considered:**
+- 100k planned up front (rejected: no evidence it's needed; 4+ weeks).
+- 49,152 planned up front (rejected: commits 2 weeks before seeing a curve).
+- Switch the encoder to a small CPU model so a live demo could run free with
+  NIM for generation (rejected by the architect 2026-10-13; would change
+  the design and require deciding before the retrain).
+**Consequence:** The decision to train longer is made from the held-out
+learning curve, not guessed. Every per-update checkpoint is kept as a
+demo "version". The M8 MSD's "not a mocked/precomputed pair" DoD item will
+need amending to allow clearly-labelled recorded replays.
