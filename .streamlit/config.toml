@@ -1,0 +1,13 @@
+# Streamlit settings for the ATAR demo (read when `streamlit run` is started
+# from the repo root).
+
+[server]
+# The file watcher walks every imported module to find files to watch. On
+# `transformers` that triggers imports of vision submodules needing
+# torchvision (not an ATAR dependency) and floods the log with harmless
+# "Examining the path of transformers.models..." tracebacks. The demo doesn't
+# need hot reload: restart streamlit after editing code.
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false

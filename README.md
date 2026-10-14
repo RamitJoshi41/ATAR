@@ -429,7 +429,9 @@ See `KAGGLE.md` for the runbook.
 
 ## M8: Streamlit Demo (`atar/demo/`)
 
-**What:** `streamlit run atar/demo/app.py` — three tabs:
+**What:** `streamlit run atar/demo/app.py` (from the repo root, so `.streamlit/config.toml` is
+picked up; it turns off Streamlit's file watcher, which otherwise floods the log with harmless
+`transformers`/`torchvision` tracebacks — restart the app after editing code) — three tabs:
 
 - **Training progress:** held-out success (or tool calls / efficiency) vs.
   training step, one point per saved checkpoint with a 95% bootstrap band,
