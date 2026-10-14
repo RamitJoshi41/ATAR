@@ -31,7 +31,7 @@ import json
 import logging
 import random
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import torch
@@ -207,6 +207,8 @@ class ATAREnv(gymnasium.Env):
         data_dir: str | Path | None = None,
         seed: int | None = None,
         skip_internal_encode: bool = False,
+        search_backend: Callable[[dict], ToolResult] | None = None,
+        max_turns: int = MAX_TURNS,
     ) -> None:
         super().__init__()
 
@@ -236,6 +238,15 @@ class ATAREnv(gymnasium.Env):
 
         # M7 batching flag — see class docstring
         self._skip_internal_encode: bool = skip_internal_encode
+
+        # Demo hooks (M8).  search_backend replaces M1's simulated BM25
+        # search for SEARCH_WEB (e.g. live Wikipedia search); None = M1.
+        # max_turns may only SHORTEN episodes: the budget feature is still
+        # normalised by MAX_TURNS, the value the policy was trained with.
+        if not 1 <= max_turns <= MAX_TURNS:
+            raise ValueError(f"max_turns must be in [1, {MAX_TURNS}], got {max_turns}")
+        self._search_backend = search_backend
+        self._max_turns: int = max_turns
 
         # RNG -------------------------------------------------------------
         self._rng = random.Random(seed)
@@ -342,13 +353,15 @@ class ATAREnv(gymnasium.Env):
 
         # ---- Determine if we are truncating due to turn limit -----------
         # We allow the step to complete before reporting truncated=True
-        is_at_limit = self._turn >= MAX_TURNS
+        is_at_limit = self._turn >= self._max_turns
 
         # ---- Dispatch action -------------------------------------------
         terminated = False
         truncated = False
         tool_result: ToolResult | None = None
         params_valid = True   # set by each branch from M4's validate()
+        step_params: dict | None = None    # validated params (for M8 replays)
+        param_error: str | None = None     # M4's rejection reason, if any
 
         # Reward components accumulators
         acc_accuracy: float = 0.0
@@ -369,6 +382,10 @@ class ATAREnv(gymnasium.Env):
             # Validate params
             valid, params_or_err = validate(action, response)
             params_valid = valid
+            if valid:
+                step_params = dict(params_or_err)  # type: ignore[arg-type]
+            else:
+                param_error = str(params_or_err)
 
             if not valid:
                 # Safety penalty for invalid params
@@ -394,6 +411,10 @@ class ATAREnv(gymnasium.Env):
             response = self._generate_params(conditioned)
             valid, params_or_err = validate(action, response)
             params_valid = valid
+            if valid:
+                step_params = dict(params_or_err)  # type: ignore[arg-type]
+            else:
+                param_error = str(params_or_err)
 
             if not valid:
                 acc_safety += _SAFETY_INVALID_PARAMS
@@ -437,6 +458,10 @@ class ATAREnv(gymnasium.Env):
             response = self._generate_params(conditioned)
             valid, params_or_err = validate(action, response)
             params_valid = valid
+            if valid:
+                step_params = dict(params_or_err)  # type: ignore[arg-type]
+            else:
+                param_error = str(params_or_err)
 
             if not valid:
                 acc_safety += _SAFETY_INVALID_PARAMS
@@ -457,7 +482,10 @@ class ATAREnv(gymnasium.Env):
                 is_redundant = self._is_redundant_call(action, params_or_err)
 
                 # Execute tool (deterministic=False — live training, not ground truth)
-                tool_result = execute_tool(action, params_or_err, deterministic=False)
+                if action == ActionType.SEARCH_WEB and self._search_backend is not None:
+                    tool_result = self._search_backend(params_or_err)
+                else:
+                    tool_result = execute_tool(action, params_or_err, deterministic=False)
                 self._last_result = tool_result
                 self._tool_history[action.value] = 1.0
                 self._tool_call_count += 1
@@ -512,6 +540,9 @@ class ATAREnv(gymnasium.Env):
             "had_tool_failure": self._had_tool_failure,
             "tool_call_count": self._tool_call_count,
             "params_valid": params_valid,
+            "params": step_params,
+            "param_error": param_error,
+            "cumulative_tokens": self._cumulative_tokens,
         }
 
         return next_state, reward, terminated, truncated, info
@@ -564,7 +595,7 @@ class ATAREnv(gymnasium.Env):
         state[s:e] = _outcome_embedding(self._last_result)
 
         # [455:457] — Budget features
-        turns_remaining_norm = (MAX_TURNS - self._turn) / MAX_TURNS
+        turns_remaining_norm = (self._max_turns - self._turn) / MAX_TURNS
         tokens_norm = min(self._cumulative_tokens / MAX_TOKENS_NORMALIZER, 1.0)
         s, e = BUDGET_RANGE
         state[s] = turns_remaining_norm

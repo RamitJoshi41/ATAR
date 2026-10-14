@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import logging
 import sys
 from pathlib import Path
@@ -87,7 +88,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--max-tasks",
         type=int,
         default=None,
-        help="If set, only evaluate this many tasks per agent (smoke-test flag).",
+        help="If set, only evaluate this many tasks per agent, spread evenly across tiers (smoke-test flag).",
     )
     p.add_argument(
         "--model-name",
@@ -160,8 +161,9 @@ def main() -> int:
 
     # ── Deferred imports (keep --help fast) ────────────────────────────────
     from atar.evaluation.runner import (
+        CheckpointMismatchError,
         EvalRunner,
-        ATARAgent,
+        load_atar_agent,
         RandomAgent,
         ZeroShotAgent,
         ReActAgent,
@@ -170,8 +172,6 @@ def main() -> int:
         verify_stratification,
     )
     from atar.llm.llm_interface import LLMInterface
-    from atar.policy.policy_network import ATARPolicy
-    from atar.policy.trainer import PPOTrainer
 
     # ── Load test tasks ───────────────────────────────────────────────────
     test_tasks = load_tasks_from_jsonl(test_path)
@@ -194,41 +194,35 @@ def main() -> int:
     agents: dict[str, object] = {}
     # Identity of each agent's run — resuming into an out-dir produced by a
     # different checkpoint/model/seed is refused (see EvalRunner).
-    base_fp = {"model_name": args.model_name, "seed": args.seed, "grader": "answer_matching_v2"}
+    # Bump agent_version whenever an agent's behaviour changes (e.g. the ReAct
+    # prompt), so old per-task results are not resumed into new ones.
+    base_fp = {
+        "model_name": args.model_name, "seed": args.seed,
+        "grader": "answer_matching_v2", "agent_version": "2026-10-14",
+    }
     fingerprints: dict[str, dict] = {}
 
     for name in agent_names:
         fingerprints[name] = dict(base_fp)
         if name == "atar":
             logger.info("Loading ATAR checkpoint: %s", args.checkpoint)
-            ckpt = PPOTrainer.load_checkpoint(args.checkpoint)
-            policy = ATARPolicy()
-            policy.load_state_dict(ckpt.policy_state_dict)
-            policy = policy.to(args.device)
-
-            # The policy was trained on states built by THIS projection, so
-            # it must be restored too.  A hidden-size mismatch means the
-            # checkpoint was trained on a different LLM (e.g. 7B vs 0.5B).
-            if ckpt.projection_state_dict is not None:
-                ckpt_in = ckpt.projection_state_dict["weight"].shape[1]
-                if ckpt_in != llm.projection.in_features:
-                    logger.error(
-                        "Checkpoint projection expects hidden size %d but %s has %d. "
-                        "Evaluate with the same --model-name used for training.",
-                        ckpt_in, args.model_name, llm.projection.in_features,
-                    )
-                    return 1
-                llm.projection.load_state_dict(ckpt.projection_state_dict)
-                logger.info("Loaded co-trained projection weights from checkpoint.")
-            else:
-                logger.warning(
-                    "Checkpoint has no projection weights (pre-co-training format). "
-                    "Using the seeded initial projection — results are only "
-                    "meaningful if --model-name matches the model used in training."
-                )
-
-            agents["atar"] = ATARAgent(policy=policy, device=args.device)
+            try:
+                agents["atar"], ckpt = load_atar_agent(args.checkpoint, llm, args.device)
+            except CheckpointMismatchError as exc:
+                logger.error("%s", exc)
+                return 1
             fingerprints["atar"]["checkpoint_sha256"] = _sha256(args.checkpoint)
+            # Read by scripts/build_demo_bundle.py to place this checkpoint on
+            # the learning curve.
+            run_meta = {
+                "checkpoint_path": str(args.checkpoint),
+                "checkpoint_step": ckpt.step,
+                "curriculum_phase": ckpt.curriculum_phase,
+                "checkpoint_sha256": fingerprints["atar"]["checkpoint_sha256"],
+                "model_name": args.model_name,
+            }
+            Path(args.out_dir).mkdir(parents=True, exist_ok=True)
+            (Path(args.out_dir) / "run_meta.json").write_text(json.dumps(run_meta, indent=2))
             logger.info(
                 "ATAR policy loaded (step=%d, phase=%d).",
                 ckpt.step, ckpt.curriculum_phase,

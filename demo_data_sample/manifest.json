@@ -1,0 +1,19 @@
+{
+  "model_name": "Qwen/Qwen2.5-0.5B-Instruct",
+  "created_at": "2026-10-14T11:38:38+00:00",
+  "is_sample": true,
+  "note": "Stand-in Qwen2.5-0.5B, a 128-step toy training run, 10 held-out tasks per evaluation (2 per tier), 1 replay task per tier. Built 2026-10-14 to exercise the demo.",
+  "eval_dirs": [
+    "eval_step0",
+    "eval_step64",
+    "eval_step128",
+    "eval_baselines"
+  ],
+  "n_checkpoints_on_curve": 3,
+  "baselines": [
+    "random",
+    "react",
+    "zeroshot"
+  ],
+  "n_replays": 30
+}

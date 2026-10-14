@@ -36,16 +36,21 @@ Available actions (choose exactly one per step):
   5 - CLARIFY          (ask a clarifying question)
   6 - TERMINATE        (end the episode with current answer)
 
-Your output must be valid JSON with key "action" (int 0-6)."""
+Each step, first write a one-sentence "thought" about what to do next, then
+choose the action. Output valid JSON: {"thought": "...", "action": <int 0-6>}."""
 
 _REACT_ACTION_SCHEMA = {
     "title": "ReActAction",
     "type": "object",
     "properties": {
+        # Thought before Action, as in ReAct (Yao et al. 2023); capped so a
+        # rambling thought can't exhaust max_new_tokens before "action".
+        "thought": {"type": "string", "maxLength": 240},
         "action": {"type": "integer", "minimum": 0, "maximum": 6},
     },
-    "required": ["action"],
+    "required": ["thought", "action"],
 }
+_REACT_MAX_NEW_TOKENS = 128
 
 
 class RandomBaseline:
@@ -178,13 +183,15 @@ class ReActBaseline:
                     result = self._llm.generate(
                         messages=messages,
                         json_schema=_REACT_ACTION_SCHEMA,
-                        max_new_tokens=64,
+                        max_new_tokens=_REACT_MAX_NEW_TOKENS,
                     )
                     action_int = int(result.get("action", ActionType.TERMINATE))
                     action_int = max(0, min(action_int, len(ActionType) - 1))
+                    thought = str(result.get("thought", ""))
                 except Exception as exc:
                     logger.warning("ReAct generate() failed: %s; using TERMINATE", exc)
                     action_int = ActionType.TERMINATE
+                    thought = ""
 
                 _, _, terminated, truncated, info = env.step(action_int)
                 done = terminated or truncated
@@ -198,9 +205,10 @@ class ReActBaseline:
 
                 # Append Action → Observation so the next decision sees
                 # what was already tried.
-                messages.append(
-                    {"role": "assistant", "content": f"Action: {ActionType(action_int).name}"}
-                )
+                messages.append({
+                    "role": "assistant",
+                    "content": f"Thought: {thought}\nAction: {ActionType(action_int).name}",
+                })
                 tool_result = info.get("tool_result")
                 if tool_result is not None:
                     observation = (

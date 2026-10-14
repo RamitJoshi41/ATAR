@@ -179,3 +179,43 @@ safely into the same `--out-dir` as long as checkpoint/model/seed match):
 
 Outputs: `comparison.md` (table with 95% bootstrap CIs, per tier),
 `results.json`, `per_task.jsonl`, `failures.jsonl` (ATAR failures, input for M6).
+
+## 6. Demo data (after training: learning curve + replays)
+
+Everything the Streamlit demo shows is computed here, on the GPU, with the
+training model. Use a separate session from training if needed — every step
+below resumes safely.
+
+1. **Step-0 checkpoint** (the untrained starting point; no download needed):
+   ```python
+   !python scripts/make_untrained_checkpoint.py --hidden-size 3584 --out /kaggle/working/checkpoints/checkpoint_step_0.pt
+   ```
+2. **Evaluate the versions you want on the curve** — e.g. step 0, every
+   ~6k steps, and the final one — each into its own folder (≈ 45 min each
+   for 200 tasks; `--max-tasks 50` ≈ 12 min gives a rougher curve):
+   ```python
+   for step in [0, 6144, 12288, 18432, 24576]:
+       !python scripts/evaluate.py --checkpoint /kaggle/working/checkpoints/checkpoint_step_{step}.pt \
+           --agents atar --model-name Qwen/Qwen2.5-7B-Instruct --device cuda --out-dir /kaggle/working/eval_step{step}
+   ```
+3. **Baselines once** (the same tasks; or reuse section 5's `eval_final`):
+   ```python
+   !python scripts/evaluate.py --agents react,zeroshot,random \
+       --model-name Qwen/Qwen2.5-7B-Instruct --device cuda --out-dir /kaggle/working/eval_baselines
+   ```
+4. **Record replays** (3 tasks per tier × each version + baselines):
+   ```python
+   # In a notebook, {...} inside a ! command is Python, so build the list first.
+   ckpts = " ".join(f"/kaggle/working/checkpoints/checkpoint_step_{s}.pt" for s in [0, 6144, 12288, 18432, 24576])
+   !python scripts/record_replays.py --checkpoints {ckpts} \
+       --baselines react,zeroshot,random --tasks-per-tier 3 \
+       --model-name Qwen/Qwen2.5-7B-Instruct --device cuda --out /kaggle/working/replays.jsonl
+   ```
+5. **Build the bundle** (CPU is fine) and download `demo_data/`:
+   ```python
+   !python scripts/build_demo_bundle.py --model-name Qwen/Qwen2.5-7B-Instruct \
+       --eval-dirs /kaggle/working/eval_step* /kaggle/working/eval_baselines \
+       --replays /kaggle/working/replays.jsonl --out /kaggle/working/demo_data
+   ```
+6. Locally: put the folder at `<repo>/demo_data/` and run
+   `streamlit run atar/demo/app.py`.

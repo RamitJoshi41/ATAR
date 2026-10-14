@@ -27,7 +27,11 @@ from atar.env.answer_matching import is_answer_correct
 from atar.env.atar_env import ATAREnv
 from atar.llm.llm_interface import LLMInterface
 from atar.policy.policy_network import ATARPolicy
-from atar.policy.baselines import _REACT_SYSTEM_PROMPT, _REACT_ACTION_SCHEMA
+from atar.policy.baselines import (
+    _REACT_ACTION_SCHEMA,
+    _REACT_MAX_NEW_TOKENS,
+    _REACT_SYSTEM_PROMPT,
+)
 from atar.shared.shared_types import ActionType, Task
 from atar.evaluation.metrics import aggregate_metrics
 
@@ -128,6 +132,26 @@ def verify_stratification(
     return tier_counts
 
 
+def stratified_subset(tasks: list[Task], n: int) -> list[Task]:
+    """
+    The first ``n`` tasks taken round-robin across tiers (file order within a
+    tier), so a smoke run covers every tier.  tasks_test.jsonl is sorted by
+    tier, so a plain ``tasks[:n]`` would be tier 1 only.
+    """
+    by_tier: dict[int, list[Task]] = {}
+    for t in tasks:
+        by_tier.setdefault(t.tier, []).append(t)
+    queues = [by_tier[tier] for tier in sorted(by_tier)]
+    picked: list[Task] = []
+    i = 0
+    while len(picked) < n and any(i < len(q) for q in queues):
+        for q in queues:
+            if i < len(q) and len(picked) < n:
+                picked.append(q[i])
+        i += 1
+    return picked
+
+
 # ─── Answer correctness checking ─────────────────────────────────────────
 
 def check_answer_correct(final_answer: object, ground_truth: str) -> bool:
@@ -174,6 +198,57 @@ class ATARAgent:
             logits, _ = self._policy(state_t)
             return int(torch.argmax(logits, dim=-1).item())
 
+    def action_distribution(self, state: np.ndarray) -> tuple[list[float], float]:
+        """Softmax action probabilities (7) and the value estimate for ``state``."""
+        with torch.no_grad():
+            state_t = torch.as_tensor(state, dtype=torch.float32).to(self._device)
+            logits, value = self._policy(state_t)
+            # The policy may return a batch dimension for a single state.
+            probs = torch.softmax(logits.reshape(-1), dim=-1).cpu().tolist()
+            return [float(p) for p in probs], float(value.reshape(-1)[0].item())
+
+
+class CheckpointMismatchError(RuntimeError):
+    """The checkpoint was trained on a different LLM than the one loaded."""
+
+
+def load_atar_agent(
+    checkpoint_path: str | Path,
+    llm: LLMInterface,
+    device: str = "cpu",
+) -> tuple["ATARAgent", Any]:
+    """
+    Load a training checkpoint as a greedy ATARAgent.
+
+    Restores the policy AND the co-trained projection into ``llm`` — the
+    policy was trained on states built by that projection.  Raises
+    CheckpointMismatchError when the checkpoint's projection expects a
+    different hidden size (i.e. it was trained on another model, such as
+    the 7B vs the local 0.5B stand-in).  Returns (agent, CheckpointState).
+    """
+    from atar.policy.trainer import PPOTrainer  # deferred: pulls in wandb
+
+    ckpt = PPOTrainer.load_checkpoint(checkpoint_path)
+    policy = ATARPolicy()
+    policy.load_state_dict(ckpt.policy_state_dict)
+    policy = policy.to(device)
+
+    if ckpt.projection_state_dict is not None:
+        ckpt_in = ckpt.projection_state_dict["weight"].shape[1]
+        if ckpt_in != llm.projection.in_features:
+            raise CheckpointMismatchError(
+                f"Checkpoint projection expects hidden size {ckpt_in} but "
+                f"{llm.model_name} has {llm.projection.in_features}. Use the "
+                "same model that was used for training."
+            )
+        llm.projection.load_state_dict(ckpt.projection_state_dict)
+    else:
+        logger.warning(
+            "Checkpoint %s has no projection weights (pre-co-training format); "
+            "using the seeded initial projection.", checkpoint_path,
+        )
+    return ATARAgent(policy=policy, device=device), ckpt
+
 
 class RandomAgent:
     """Uniform random action selection."""
@@ -215,6 +290,7 @@ class ReActAgent:
         self._llm = llm
         self._messages: list[dict] = []
         self._query: str = ""
+        self.last_thought: str = ""   # shown by the M8 demo
 
     def reset(self, query: str) -> None:
         self._query = query
@@ -228,13 +304,15 @@ class ReActAgent:
             result = self._llm.generate(
                 messages=self._messages,
                 json_schema=_REACT_ACTION_SCHEMA,
-                max_new_tokens=64,
+                max_new_tokens=_REACT_MAX_NEW_TOKENS,
             )
             action_int = int(result.get("action", ActionType.TERMINATE))
             action_int = max(0, min(action_int, len(ActionType) - 1))
+            self.last_thought = str(result.get("thought", ""))
         except Exception as exc:
             logger.warning("ReAct generate() failed: %s; using TERMINATE", exc)
             action_int = ActionType.TERMINATE
+            self.last_thought = f"(generation failed: {exc}; terminating)"
         return action_int
 
     def observe(self, action: int, info: dict) -> None:
@@ -242,9 +320,10 @@ class ReActAgent:
         Append the chosen action and its result to the conversation, so the
         next decision can see what was already tried (Action → Observation).
         """
-        self._messages.append(
-            {"role": "assistant", "content": f"Action: {ActionType(action).name}"}
-        )
+        self._messages.append({
+            "role": "assistant",
+            "content": f"Thought: {self.last_thought}\nAction: {ActionType(action).name}",
+        })
         tool_result = info.get("tool_result")
         if tool_result is not None:
             observation = (
@@ -317,7 +396,8 @@ class EvalRunner:
         agent : Any
             Agent object with .select_action(state) -> int.
         max_tasks : int | None
-            If set, only evaluate this many tasks (smoke-test flag).
+            If set, only evaluate this many tasks, spread evenly across tiers
+            (smoke-test flag).
 
         Returns
         -------
@@ -352,7 +432,7 @@ class EvalRunner:
 
         tasks_to_run = self._tasks
         if max_tasks is not None:
-            tasks_to_run = tasks_to_run[:max_tasks]
+            tasks_to_run = stratified_subset(tasks_to_run, max_tasks)
 
         records = list(existing_records)
 

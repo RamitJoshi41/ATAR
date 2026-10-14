@@ -27,6 +27,25 @@ from outlines.models import Transformers
 from atar.configs.base_config import load_config
 
 
+PROJECTION_SEED = 42
+
+
+def init_projection(hidden_size: int) -> nn.Linear:
+    """
+    The projection's initial weights: Linear(hidden_size, 384), float32,
+    uniform(+-1/sqrt(hidden_size)) from a private generator seeded with
+    PROJECTION_SEED — identical on every machine and independent of the
+    global torch RNG.  Also used to build a step-0 (untrained) checkpoint.
+    """
+    gen = torch.Generator().manual_seed(PROJECTION_SEED)
+    projection = nn.Linear(hidden_size, 384, dtype=torch.float32)
+    with torch.no_grad():
+        bound = 1.0 / math.sqrt(hidden_size)
+        projection.weight.uniform_(-bound, bound, generator=gen)
+        projection.bias.uniform_(-bound, bound, generator=gen)
+    return projection
+
+
 class ModelLoadError(Exception):
     """Raised when the underlying model fails to load."""
     pass
@@ -102,13 +121,7 @@ class LLMInterface:
         # on float16 weights underflow (the layer is only ~1.4M params, so the
         # memory cost is negligible).  A local Generator keeps the global
         # torch RNG untouched.
-        gen = torch.Generator().manual_seed(42)
-        self.projection = nn.Linear(hidden_size, 384, dtype=torch.float32)
-        with torch.no_grad():
-            bound = 1.0 / math.sqrt(hidden_size)
-            self.projection.weight.uniform_(-bound, bound, generator=gen)
-            self.projection.bias.uniform_(-bound, bound, generator=gen)
-        self.projection = self.projection.to(self.base_model.device)
+        self.projection = init_projection(hidden_size).to(self.base_model.device)
         self.projection.requires_grad_(True)
 
         # Wrap with Outlines for constrained generation (Outlines 1.3.x API).

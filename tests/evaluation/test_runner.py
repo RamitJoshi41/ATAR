@@ -204,3 +204,24 @@ class TestResumeFingerprint:
         per_task.write_text('{"task_id": "x"}\n')
         with pytest.raises(RuntimeError, match="no per_task_atar.meta.json"):
             self._runner(tmp_path, {"checkpoint_sha256": "aaa"})._check_or_write_fingerprint("atar", per_task)
+
+
+# ─── --max-tasks subset ─────────────────────────────────────────────────────
+
+def test_stratified_subset_covers_every_tier() -> None:
+    """tasks_test.jsonl is sorted by tier; a smoke subset must not be tier 1 only."""
+    from atar.evaluation.runner import stratified_subset
+    tasks = [_task(f"t{tier}_{i}", tier) for tier in range(1, 6) for i in range(4)]
+    picked = stratified_subset(tasks, 7)
+    assert [t.tier for t in picked] == [1, 2, 3, 4, 5, 1, 2]
+    assert [t.id for t in picked[:2]] == ["t1_0", "t2_0"]          # file order within a tier
+    assert len(stratified_subset(tasks, 100)) == 20                 # never more than exist
+
+
+def test_real_test_set_smoke_subset_is_stratified() -> None:
+    from atar.evaluation.runner import stratified_subset
+    data_dir = Path(__file__).parent.parent.parent / "data"
+    if not (data_dir / "tasks_test.jsonl").exists():
+        pytest.skip("Test data not generated yet.")
+    picked = stratified_subset(load_tasks_from_jsonl(data_dir / "tasks_test.jsonl"), 20)
+    assert sorted({t.tier for t in picked}) == [1, 2, 3, 4, 5]

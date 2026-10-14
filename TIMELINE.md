@@ -253,3 +253,38 @@ Template per entry:
   invalid and had passed by luck. Now asserts the seeded parts (episode
   length, tool-call rate): `tests/policy/test_baselines.py` 6 passed.
 - Next: push; start the real run fresh (section 3a).
+
+## 2026-10-14 — M8 Streamlit demo
+- Built: `atar/demo/` (`app.py`, `replay.py`, `live.py`, `live_search.py`,
+  `curve.py`, `charts.py`, `bundle.py`, `metrics.py`), `scripts/record_replays.py`,
+  `scripts/build_demo_bundle.py`, `scripts/make_untrained_checkpoint.py`,
+  `demo_data_sample/`, `tests/demo/` (66 tests), M8 spec amendment, ADR-21,
+  KAGGLE.md section 6. Env step info gains params/param_error/tokens; env
+  takes `search_backend` and `max_turns`; ReAct writes a Thought before each
+  action; `load_atar_agent()` shared by evaluate/record/live.
+- Ran end to end locally with the 0.5B stand-in on the RTX 3050: a 128-step
+  toy training run (4 min 45 s), step-0 checkpoint, evaluate.py on 3
+  checkpoints + 3 baselines (10 stratified tasks each), record_replays.py
+  (30 episodes, 3 min), build_demo_bundle.py --sample → `demo_data_sample/`
+  (92 KB). App driven headlessly (AppTest) and screenshotted in headless
+  Chrome.
+- Issues hit:
+  1. `--max-tasks` took the first N tasks, but tasks_test.jsonl is sorted by
+     tier → smoke evaluations were tier 1 only. Now stratified (+2 tests).
+  2. record_replays crashed: ATARPolicy returns batched logits for one state,
+     so `action_distribution` produced a nested list; unit tests had used a
+     scripted agent. Fixed + regression test with the real ATARAgent.
+  3. Screenshots showed overlapping baseline labels, a squashed action-mix
+     chart, skipped action labels, a too-dense x-axis and an auto-ranged
+     success axis. Fixed (dash-pattern legend, step-sized rows,
+     labelOverlap=False, fixed 0–100%); pinned by `tests/demo/test_charts.py`.
+  4. A KAGGLE.md cell used shell brace expansion inside a notebook `!`
+     command (Python interpolation) — rewritten to build the list in Python.
+- Observed in the toy sample (0.5B, NOT a result): the untrained policy spams
+  PYTHON_EXEC with invalid code (−10 each); after 64 steps it learned to
+  TERMINATE immediately. That "give up early" mode is what the
+  `invalid_param_rate/*` charts watch for in the real run.
+- Test results (venv): full suite **454 passed, 0 failed** (12 min);
+  `tests/demo/` 66 passed. ruff clean on all new/changed demo code (older
+  test files still carry 18 pre-existing unused-import warnings, untouched).
+- Next: after the Kaggle run, KAGGLE.md section 6 → real `demo_data/`.

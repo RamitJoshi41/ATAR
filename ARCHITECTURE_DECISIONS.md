@@ -461,3 +461,36 @@ The pilot otherwise confirmed the fixes: value_loss ≈ 33 (real return scale,
 vs. stuck at ≈ 0.9 before ADR-15), entropy 1.76 of a 1.95 maximum (still
 exploring), LR and entropy-coefficient schedules exactly as computed, and
 3.7 s/step throughput.
+
+## ADR-21: M8 demo = data bundle + one episode-record format for replay and live
+**Date:** 2026-10-14
+**Decision:** The demo reads a *bundle* folder (`manifest.json`,
+`curve.json`, `replays.jsonl`) built offline by
+`scripts/build_demo_bundle.py` from `evaluate.py` outputs (learning curve,
+per-version action mix) and `scripts/record_replays.py` outputs (episodes).
+Replays and live runs share one record type (`atar.demo.replay.StepRecord` /
+`EpisodeRecord`) produced by one generator, `iter_episode`, so a recorded
+episode renders exactly like a live one and step-through works the same in
+both. Supporting changes: ATAREnv's step `info` gains `params`,
+`param_error` and `cumulative_tokens`; ATAREnv takes `search_backend`
+(live Wikipedia search) and `max_turns` (may only shorten episodes; the
+budget feature stays normalised by the training value 5); ReAct now emits a
+one-sentence Thought before each action (as in Yao et al.), shared by the
+evaluation and the demo; `load_atar_agent()` is the single checkpoint loader
+(evaluate, record, live); `scripts/make_untrained_checkpoint.py` provides
+the step-0 point; `--max-tasks` now takes a tier-stratified subset.
+**Context:** The policy can only run where the training model runs (hidden
+states), the architect wants versions over training steps, and the M8 DoD
+requires step-through, side-by-side ReAct vs ATAR and a live-tools toggle.
+**Alternatives considered:**
+- Live only (rejected: needs a GPU host for every viewer).
+- Precompute screenshots/videos (rejected: no step-through, no inspection
+  of probabilities or params).
+- Separate record formats for replay and live (rejected: two renderers to
+  keep in sync).
+**Consequence:** The demo runs anywhere (laptop, free CPU host) from a
+small folder; live mode is an add-on for GPU hosts. Bumping the ReAct
+prompt changed the eval fingerprint (`agent_version`), so old ReAct results
+can't be resumed into new ones. Discovered while building it: the test set
+is sorted by tier, so the old `--max-tasks N` smoke runs evaluated tier 1
+only.

@@ -424,3 +424,52 @@ See `KAGGLE.md` for the runbook.
 **What actually happened when run (stand-in model, CPU):** full suite
 `venv/bin/python3 -m pytest tests/ atar/tests` — **379 passed, 0 failed** (8 min 58 s).
 
+
+---
+
+## M8: Streamlit Demo (`atar/demo/`)
+
+**What:** `streamlit run atar/demo/app.py` — three tabs:
+
+- **Training progress:** held-out success (or tool calls / efficiency) vs.
+  training step, one point per saved checkpoint with a 95% bootstrap band,
+  baselines (ReAct, zero-shot, random) as reference lines; per-tier filter;
+  the action mix of every version; a table view.
+- **Replay:** pick a held-out task, an ATAR version and something to compare
+  with (ReAct by default, or another version). Each step shows the action,
+  ATAR's action probabilities and value estimate, ReAct's thought, the
+  generated tool parameters (or the validator's rejection), the tool result
+  and the reward breakdown. Step-through mode; "this task across every
+  version" table; session metrics panel.
+- **Live:** on a GPU host that can load the training model, runs ATAR and
+  ReAct side by side on a typed or example question; max-turns slider,
+  step-through, and a live-tools toggle (SEARCH_WEB → real Wikipedia,
+  clearly labelled as outside the training distribution).
+
+**Data:** a bundle folder built by `scripts/build_demo_bundle.py` from
+`evaluate.py` outputs and `scripts/record_replays.py` episodes (KAGGLE.md
+section 6). `scripts/make_untrained_checkpoint.py` provides the step-0
+point. A **sample** bundle built with the 0.5B stand-in ships in
+`demo_data_sample/` and is always shown with a "SAMPLE DATA — not ATAR's
+results" banner.
+
+**Why this design:** the policy reads the training model's hidden states, so
+it can only run where that model runs; recorded replays make the demo work
+anywhere, and one record format serves replay and live (ADR-21). The M8 spec
+was amended accordingly (see the amendment at the end of
+`msds/M8_streamlit_demo.md`).
+
+**What actually happened when run (2026-10-14, stand-in 0.5B on the local RTX 3050):**
+the whole pipeline ran end to end — a 128-step toy training run, step-0
+checkpoint, `evaluate.py` on 3 checkpoints + 3 baselines (10 tier-stratified
+tasks each), `record_replays.py` (30 episodes), `build_demo_bundle.py
+--sample` → `demo_data_sample/`. The app was driven headlessly (Streamlit
+AppTest) and screenshotted in headless Chrome; the screenshots exposed five
+layout problems (overlapping baseline labels, squashed action-mix chart,
+skipped action labels, dense axis, auto-ranged success axis), all fixed and
+pinned by `tests/demo/test_charts.py`. Tests: `tests/demo/` **66 passed**;
+full suite **454 passed, 0 failed**. The sample's numbers are toy numbers
+from a 0.5B model — not results. Live mode's model loading was not run
+locally with a real checkpoint (it needs the 7B on a GPU); its parts are
+tested separately (query validation, live search with a fake opener, env
+search-backend hook, step-by-step episode generator).
