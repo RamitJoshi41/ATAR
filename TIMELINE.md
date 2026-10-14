@@ -231,3 +231,25 @@ Template per entry:
   ~4 h pilot, extension section.
 - Next: push; Kaggle pilot; then M8 demo (replay recorder + version dropdown
   + held-out learning curve).
+
+## 2026-10-14 — Kaggle pilot reviewed; CLARIFY reward fix
+- Pilot (3 updates, 3,072 steps, 11,295 s → 3.7 s/step): pipeline healthy —
+  value_loss 33.0 (real scale; was pinned ≈ 0.9 before the returns fix),
+  entropy 1.76 (max 1.95), lr 2.89e-4 and entropy_coef 0.008875 match the
+  schedules exactly, success 0.65 (tier 1) / 0.57 (tier 2), 467 episodes
+  in the last rollout. Only end-of-run values were available, so no trend.
+- Found: CLARIFY was 14.6% of actions in Phase 1 (no ambiguous tasks) — the
+  env paid +1 for every CLARIFY. Fixed per the M5 spec (ADR-20) with 3 new
+  tests (`tests/env/test_clarify_reward.py`).
+- Added: `params_valid` in env info; `step_reward/*` and
+  `invalid_param_rate/*` W&B charts (to explain CALCULATOR at 3%);
+  `metrics.jsonl` per-update history next to checkpoints (+1 test).
+- KAGGLE.md: 3.7 s/step, `--stop-after-updates 8` (3 sessions for 24 updates),
+  metrics.jsonl handling.
+- Test results (venv): full suite **385 passed, 1 failed** (16 min) —
+  `test_random_baseline_deterministic_with_seed` compared baseline accuracy
+  across two seeded runs; since accuracy now means real correctness (env task
+  sampling + LLM sampling, not seeded by the baseline) that comparison was
+  invalid and had passed by luck. Now asserts the seeded parts (episode
+  length, tool-call rate): `tests/policy/test_baselines.py` 6 passed.
+- Next: push; start the real run fresh (section 3a).

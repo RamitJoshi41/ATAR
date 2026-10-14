@@ -411,6 +411,7 @@ meaningless. Fixed, with regression tests:
 | substring answer grader (env reward and eval) | `"6"` matched `61559.0`, `"I do not know"` matched `no`; `"2660 + 58899 = 61559"` was marked wrong | one shared grader `atar/env/answer_matching.py` (ADR-17) |
 | baselines' `accuracy` | counted TERMINATE actions, not correct answers | uses the env's `info["correct"]` |
 | size-1 final minibatch | advantage std = NaN → NaN weights | normalise only when n > 1 |
+| CLARIFY paid +1 on every task (found by the 2026-10-14 pilot: 14.6% of Phase-1 actions, no ambiguous tasks there) | free, farmable reward | +1 only once, only on tasks that need CLARIFY; otherwise −0.5 like any tool call (ADR-20) |
 
 Also added: `--wandb-run-id` (and the run id is stored in checkpoints, so all
 Kaggle sessions of one run log to the same W&B run), and W&B charts for the

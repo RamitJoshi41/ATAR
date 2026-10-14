@@ -88,11 +88,19 @@ def test_random_baseline_value_ranges(envs: list[ATAREnv]) -> None:
 
 
 def test_random_baseline_deterministic_with_seed(envs: list[ATAREnv]) -> None:
-    """RandomBaseline results must be reproducible with the same seed."""
+    """
+    The random POLICY must be reproducible with the same seed: same actions,
+    hence the same episode lengths and tool-call rate.
+
+    Accuracy is deliberately not compared: since 2026-10-13 it measures real
+    answer correctness, which also depends on the env's task sampling and the
+    LLM's sampled answers — neither is controlled by the baseline's seed.
+    (Before, "accuracy" was the TERMINATE rate, a pure function of actions.)
+    """
     result1 = RandomBaseline(seed=77).evaluate(envs, n_tasks=5)
     result2 = RandomBaseline(seed=77).evaluate(envs, n_tasks=5)
-    assert result1["accuracy"] == result2["accuracy"]
     assert result1["avg_episode_length"] == result2["avg_episode_length"]
+    assert result1["tool_call_rate"] == result2["tool_call_rate"]
 
 
 def test_react_baseline_returns_expected_keys(

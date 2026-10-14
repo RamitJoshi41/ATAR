@@ -424,3 +424,30 @@ def test_extension_refuses_unfinished_run(
     trainer._global_step = 50
     with pytest.raises(ValueError):
         trainer.start_extension(40, lr=1e-4)
+
+
+def test_metrics_jsonl_has_one_record_per_update(
+    llm: LLMInterface, data_dir: Path, tmp_path: Path
+) -> None:
+    """
+    Every update appends its full metrics (collection stats + PPO losses) to
+    checkpoint_dir/metrics.jsonl, so the training history can be shared
+    without W&B access.
+    """
+    import json
+
+    ckpt_dir = tmp_path / "ckpts_metrics"
+    trainer = PPOTrainer(
+        policy=ATARPolicy(), llm=llm, data_dir=str(data_dir), n_envs=2,
+        rollout_steps=8, total_steps=50, batch_size=4, epochs_per_update=1,
+        checkpoint_dir=str(ckpt_dir), wandb_mode="offline", stop_after_updates=2,
+    )
+    trainer.train()
+    records = [json.loads(line) for line in (ckpt_dir / "metrics.jsonl").read_text().splitlines()]
+
+    assert [r["global_step"] for r in records] == [8, 16]
+    for r in records:
+        assert {"value_loss", "policy_loss", "entropy", "lr", "curriculum_phase"} <= r.keys()
+        if r["n_episodes_completed"] > 0:
+            assert any(k.startswith("action_frac/") for k in r)
+            assert any(k.startswith("invalid_param_rate/") for k in r)

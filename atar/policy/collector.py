@@ -128,6 +128,8 @@ class VectorizedCollector:
         self._episode_lengths: list[int] = [0] * n_envs
         self._completed_episodes: list[dict[str, Any]] = []
         self._action_counts: np.ndarray = np.zeros(len(ActionType), dtype=np.int64)
+        self._action_reward_sum: np.ndarray = np.zeros(len(ActionType), dtype=np.float64)
+        self._action_invalid: np.ndarray = np.zeros(len(ActionType), dtype=np.int64)
 
     # ------------------------------------------------------------------
     # Public API
@@ -181,6 +183,8 @@ class VectorizedCollector:
 
         self._completed_episodes.clear()
         self._action_counts[:] = 0
+        self._action_reward_sum[:] = 0.0
+        self._action_invalid[:] = 0
         total_steps_collected = 0
 
         while total_steps_collected < steps:
@@ -229,6 +233,9 @@ class VectorizedCollector:
                 buffer.add(ep_step, pooled=pooled[i], env_id=i)
                 total_steps_collected += 1
                 self._action_counts[action_int] += 1
+                self._action_reward_sum[action_int] += reward_float
+                if not info.get("params_valid", True):
+                    self._action_invalid[action_int] += 1
 
                 # Per-episode tracking
                 self._episode_rewards[i] += reward_float
@@ -328,7 +335,15 @@ class VectorizedCollector:
         # (e.g. always ANSWER_DIRECTLY).
         total_actions = max(int(self._action_counts.sum()), 1)
         for action in ActionType:
-            stats[f"action_frac/{action.name}"] = float(
-                self._action_counts[action.value] / total_actions
-            )
+            n = int(self._action_counts[action.value])
+            stats[f"action_frac/{action.name}"] = float(n / total_actions)
+            if n > 0:
+                # Why an action is (un)popular: what it earns per step, and how
+                # often the LLM's parameters for it are rejected by M4.
+                stats[f"step_reward/{action.name}"] = float(
+                    self._action_reward_sum[action.value] / n
+                )
+                stats[f"invalid_param_rate/{action.name}"] = float(
+                    self._action_invalid[action.value] / n
+                )
         return stats

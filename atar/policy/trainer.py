@@ -19,6 +19,7 @@ projection with gradients, minibatching, clipping, scheduling, checkpoints.
 from __future__ import annotations
 
 import dataclasses
+import json
 import logging
 from pathlib import Path
 from typing import Any, Literal
@@ -273,12 +274,10 @@ class PPOTrainer:
             buffer, collection_stats = self._collector.collect(n_steps=n_steps)
             self._global_step += len(buffer)
 
-            # ── GAE (architect stub) ───────────────────────────────────────
-            # compute_gae raises NotImplementedError until architect implements it.
-            # When implemented, it fills batch.advantages and batch.returns.
+            # ── GAE + PPO update ───────────────────────────────────────────
             batch = buffer.to_batch()
             self._fill_gae(batch)
-            self._run_ppo_update(batch)
+            update_stats = self._run_ppo_update(batch)
 
             # ── Logging ───────────────────────────────────────────────────
             entropy_coef = self._current_entropy_coef()
@@ -287,8 +286,13 @@ class PPOTrainer:
                 "curriculum_phase": int(self._current_phase),
                 "entropy_coef": entropy_coef,
                 **collection_stats,
+                **update_stats,
             }
             self._run.log(log_dict, step=self._global_step)
+            # Plain-file copy of every update's metrics, next to the
+            # checkpoints, so the full history survives without W&B access.
+            with open(self._checkpoint_dir / "metrics.jsonl", "a") as fh:
+                fh.write(json.dumps(log_dict) + "\n")
 
             # ── Periodic checkpointing ─────────────────────────────────────
             self._update_count += 1
@@ -541,7 +545,7 @@ class PPOTrainer:
         )
         return dataclasses.replace(mb, states=states)
 
-    def _run_ppo_update(self, batch: RolloutBatch) -> None:
+    def _run_ppo_update(self, batch: RolloutBatch) -> dict[str, float]:
         """
         Run epochs_per_update passes of the PPO update over minibatches.
 
@@ -576,10 +580,11 @@ class PPOTrainer:
 
         self._scheduler.step()
 
-        if n_updates > 0:
-            self._run.log({
-                "policy_loss": total_policy_loss / n_updates,
-                "value_loss": total_value_loss / n_updates,
-                "entropy": total_entropy / n_updates,
-                "lr": self._scheduler.get_last_lr()[0],
-            }, step=self._global_step)
+        if n_updates == 0:
+            return {}
+        return {
+            "policy_loss": total_policy_loss / n_updates,
+            "value_loss": total_value_loss / n_updates,
+            "entropy": total_entropy / n_updates,
+            "lr": self._scheduler.get_last_lr()[0],
+        }

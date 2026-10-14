@@ -3,11 +3,9 @@
 Copy each block into its own notebook cell. Notebook settings:
 **Accelerator: GPU T4 x1**, **Internet: on**, **Persistence: Files only**.
 
-Timing below uses the throughput measured in the first run's W&B export
-(2026-09-28 → 10-01): **4.0–4.9 s per env step** on a T4 with Qwen2.5-7B
-(e.g. 8,192 steps in 33,520 s), because generation is still sequential.
-The M7 spec's 2.9 s/step estimate was too optimistic. Re-check against the
-pilot's runtime and adjust `--stop-after-updates`.
+Timing below uses the 2026-10-14 pilot: **3.7 s per env step** on a T4 with
+Qwen2.5-7B (3,072 steps in 11,295 s, model loading included). The first run
+(pre-fix code) measured 4.0–4.9 s/step, so keep a margin.
 
 ---
 
@@ -32,13 +30,18 @@ os.environ["WANDB_API_KEY"] = UserSecretsClient().get_secret("WANDB_API_KEY")
 
 ## 3a. Start a NEW training run (first session only)
 
-**Recommended: run a ~4 h pilot first** — the same command as below but
+**Pilot: done 2026-10-14** (3 updates; it found the CLARIFY reward bug, see
+ADR-20 — so the real run starts fresh, not from the pilot checkpoint).
+For any future pilot: run a ~3 h pilot first — the same command as below but
 with `--stop-after-updates 3`. Before spending the rest of the week's quota,
 check the W&B charts in section 4: if the action mix collapses to a single
 action or `success_rate` doesn't move, stop and debug. If it looks healthy,
 continue the same run with 3b (resume from the pilot's last checkpoint).
 
-Do **not** resume from the old `checkpoint_step_*` files: they were trained
+Use a **new notebook** (or run `!rm -rf /kaggle/working/checkpoints` first)
+so the pilot's checkpoints don't mix with the real run's.
+
+Do **not** resume from the old `checkpoint_step_*` files or the pilot's: they were trained
 with the GAE/returns/projection/grader bugs fixed on 2026-10-13
 (see ARCHITECTURE_DECISIONS.md ADR-15..17).
 
@@ -47,28 +50,37 @@ with the GAE/returns/projection/grader bugs fixed on 2026-10-13
     --model-name Qwen/Qwen2.5-7B-Instruct --device cuda \
     --total-steps 24576 --rollout-steps 1024 \
     --checkpoint-dir /kaggle/working/checkpoints --checkpoint-interval 1 \
-    --stop-after-updates 7 \
+    --stop-after-updates 8 \
     --wandb-project atar-training --wandb-mode online
 ```
 
 Why these numbers:
-- `--rollout-steps 1024` (MSD default 2048): one update ≈ 1024 × 4.0–4.9 s
-  ≈ 70–85 min, so a session gets ~7 policy updates instead of ~3–4. More,
+- `--rollout-steps 1024` (MSD default 2048): one update ≈ 1024 × 3.7 s
+  ≈ 63 min, so a session gets ~8 policy updates instead of ~4. More,
   smaller updates is the better trade when the whole budget is ~25k steps
   (the first run got only 12 updates in total). Logged in W&B config; the
   MSD allows retuning if logged.
 - `--checkpoint-interval 1`: a checkpoint after every update, so a session
-  cut-off loses at most one update (~85 min).
-- `--stop-after-updates 7`: exits cleanly at ~8–10 h, before Kaggle's 12 h cap
+  cut-off loses at most one update (~65 min).
+- `--stop-after-updates 8`: exits cleanly at ~8.5–9 h, before Kaggle's 12 h cap
   (model loading adds ~10 min).
 - `--total-steps 24576`: same budget as the first run, but 24 updates instead
-  of 12; ≈ 28–34 GPU-hours ≈ 4 sessions, a little over one week of Kaggle's
+  of 12; ≈ 25 GPU-hours ≈ 3 sessions, within one week of Kaggle's
   ~30 h/week quota. Curriculum phases switch at steps 7,372 and 17,203.
 
 When the cell finishes, make sure `/kaggle/working/checkpoints` survives the
 session the same way you carried checkpoints between notebooks before
 (saved notebook output or a Kaggle dataset), **and** download the newest
-`checkpoint_step_*.pt` as a backup.
+`checkpoint_step_*.pt` as a backup. Also download
+`/kaggle/working/checkpoints/metrics.jsonl` (one line per update — the full
+history) and send it for review after each session.
+
+When resuming, first copy the previous `metrics.jsonl` into the new
+checkpoint dir so the history stays in one file:
+
+```python
+!mkdir -p /kaggle/working/checkpoints && cp /kaggle/input/<PREVIOUS-NOTEBOOK>/checkpoints/metrics.jsonl /kaggle/working/checkpoints/
+```
 
 ## 3b. Resume (every later session)
 
@@ -85,7 +97,7 @@ from the checkpoint, so all sessions land in the **same** W&B run.
     --model-name Qwen/Qwen2.5-7B-Instruct --device cuda \
     --total-steps 24576 --rollout-steps 1024 \
     --checkpoint-dir /kaggle/working/checkpoints --checkpoint-interval 1 \
-    --stop-after-updates 7 \
+    --stop-after-updates 8 \
     --wandb-project atar-training --wandb-mode online \
     --resume-from /kaggle/input/<PREVIOUS-NOTEBOOK>/checkpoints/checkpoint_step_<N>.pt
 ```
@@ -115,7 +127,7 @@ keep `--total-steps 24576` — it's the original plan, not the new target):
     --model-name Qwen/Qwen2.5-7B-Instruct --device cuda \
     --total-steps 24576 --rollout-steps 1024 --extend-to 49152 \
     --checkpoint-dir /kaggle/working/checkpoints --checkpoint-interval 1 \
-    --stop-after-updates 7 \
+    --stop-after-updates 8 \
     --wandb-project atar-training --wandb-mode online \
     --resume-from /kaggle/input/<PREVIOUS-NOTEBOOK>/checkpoints/<newest checkpoint>.pt
 ```
@@ -129,6 +141,7 @@ from the newest `checkpoint_step_*.pt`. The extension ends with
 | Chart | Healthy | Problem |
 |---|---|---|
 | `action_frac/*` | mix shifts toward the tools each tier needs | one action → ~1.0 (collapse; usually ANSWER_DIRECTLY) |
+| `step_reward/*`, `invalid_param_rate/*` | explain the action mix: what each action earns, how often the LLM's params for it are rejected | an action avoided because its params are rejected (a prompt/translator problem, not a policy one) |
 | `success_rate`, `success_rate/tier_k` | rises within a phase; dips when a new phase adds harder tiers | flat at the random-agent level for many updates |
 | `mean_episode_reward` | trends up | trends down / stuck very negative (invalid-param penalties) |
 | `entropy` | decreases slowly | drops to ~0 in the first few updates |

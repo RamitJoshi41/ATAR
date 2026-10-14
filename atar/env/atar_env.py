@@ -249,6 +249,7 @@ class ATAREnv(gymnasium.Env):
         self._last_result: ToolResult | None = None
         self._had_tool_failure: bool = False   # for BONUS_RECOVERY
         self._tool_call_count: int = 0
+        self._clarified: bool = False          # CLARIFY bonus paid this episode
         self._final_answer: str | None = None
         # Track which tool results have been "useful" (success=True) for
         # redundancy detection.  Maps ActionType -> ToolResult at last success.
@@ -300,6 +301,7 @@ class ATAREnv(gymnasium.Env):
         self._last_result = None
         self._had_tool_failure = False
         self._tool_call_count = 0
+        self._clarified = False
         self._final_answer = None
         self._successful_tool_results = {}
 
@@ -346,6 +348,7 @@ class ATAREnv(gymnasium.Env):
         terminated = False
         truncated = False
         tool_result: ToolResult | None = None
+        params_valid = True   # set by each branch from M4's validate()
 
         # Reward components accumulators
         acc_accuracy: float = 0.0
@@ -365,6 +368,7 @@ class ATAREnv(gymnasium.Env):
 
             # Validate params
             valid, params_or_err = validate(action, response)
+            params_valid = valid
 
             if not valid:
                 # Safety penalty for invalid params
@@ -389,6 +393,7 @@ class ATAREnv(gymnasium.Env):
             conditioned = translate(action, self._build_state())
             response = self._generate_params(conditioned)
             valid, params_or_err = validate(action, response)
+            params_valid = valid
 
             if not valid:
                 acc_safety += _SAFETY_INVALID_PARAMS
@@ -410,9 +415,18 @@ class ATAREnv(gymnasium.Env):
                 if not tool_result.success:
                     acc_safety += _SAFETY_RUNTIME_ERROR
                     self._had_tool_failure = True
-                else:
-                    # Reward for correctly executing a CLARIFY action
+                elif (
+                    ActionType.CLARIFY in self._task.required_tools
+                    and not self._clarified
+                ):
+                    # M5 spec: +1 only for recognising an AMBIGUOUS task (one
+                    # whose solution requires CLARIFY), and only once.
                     acc_safety += _SAFETY_CLARIFY_BONUS
+                    self._clarified = True
+                else:
+                    # Unneeded or repeated CLARIFY costs like any other tool
+                    # call — otherwise it is free reward the policy can farm.
+                    acc_efficiency += _EFFICIENCY_PER_TOOL_CALL
 
                 # Append result to conversation
                 self._append_tool_result_to_messages(action, tool_result)
@@ -422,6 +436,7 @@ class ATAREnv(gymnasium.Env):
             conditioned = translate(action, self._build_state())
             response = self._generate_params(conditioned)
             valid, params_or_err = validate(action, response)
+            params_valid = valid
 
             if not valid:
                 acc_safety += _SAFETY_INVALID_PARAMS
@@ -496,6 +511,7 @@ class ATAREnv(gymnasium.Env):
             "correct": terminated and acc_accuracy == _ACCURACY_CORRECT,
             "had_tool_failure": self._had_tool_failure,
             "tool_call_count": self._tool_call_count,
+            "params_valid": params_valid,
         }
 
         return next_state, reward, terminated, truncated, info

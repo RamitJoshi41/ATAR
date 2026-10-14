@@ -432,3 +432,32 @@ needs the 7B model's hidden states, so the policy cannot run on NIM alone.
 learning curve, not guessed. Every per-update checkpoint is kept as a
 demo "version". The M8 MSD's "not a mocked/precomputed pair" DoD item will
 need amending to allow clearly-labelled recorded replays.
+
+## ADR-20: CLARIFY bonus only on ambiguous tasks, once; restart after the pilot
+**Date:** 2026-10-14
+**Decision:** The +1 CLARIFY safety bonus is paid only when the task's
+solution requires CLARIFY (`ActionType.CLARIFY in task.required_tools` —
+the 150 tier-4 tasks) and only for the first CLARIFY of the episode. Any
+other CLARIFY costs the normal −0.5 tool-call efficiency penalty. The env's
+`info` also gains `params_valid`, and training logs per-action
+`step_reward/*` and `invalid_param_rate/*` plus a `metrics.jsonl` history
+file next to the checkpoints. The real run restarts from scratch.
+**Context:** The 3-update Kaggle pilot (2026-10-14) chose CLARIFY for 14.6%
+of actions during Phase 1, where no task is ambiguous. The env paid +1 for
+every successful CLARIFY on any task with no tool cost — free reward a
+policy can farm (a CLARIFY every turn beats any real tool call), contrary
+to the M5 spec ("+1 for correctly recognizing and executing a CLARIFY action
+on an ambiguous task"). The pilot also showed CALCULATOR at 3% with no way
+to tell whether that was rational (the 7B answers arithmetic well directly)
+or caused by rejected parameters — hence the per-action diagnostics.
+**Alternatives considered:**
+- Keep +1 per CLARIFY but cap it (rejected: still rewards asking on tasks
+  that need no clarification).
+- Resume the main run from the pilot checkpoint (rejected: 3 updates trained
+  under the old reward; a reward change mid-run muddies the results for
+  ~3 GPU-hours saved).
+**Consequence:** CLARIFY now has to be learned as tier-4-specific behaviour.
+The pilot otherwise confirmed the fixes: value_loss ≈ 33 (real return scale,
+vs. stuck at ≈ 0.9 before ADR-15), entropy 1.76 of a 1.95 maximum (still
+exploring), LR and entropy-coefficient schedules exactly as computed, and
+3.7 s/step throughput.
