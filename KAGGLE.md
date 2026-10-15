@@ -3,9 +3,11 @@
 Copy each block into its own notebook cell. Notebook settings:
 **Accelerator: GPU T4 x1**, **Internet: on**, **Persistence: Files only**.
 
-Timing below uses the 2026-10-14 pilot: **3.7 s per env step** on a T4 with
-Qwen2.5-7B (3,072 steps in 11,295 s, model loading included). The first run
-(pre-fix code) measured 4.0–4.9 s/step, so keep a margin.
+Timing: the 2026-10-14 pilot ran at 3.7 s per env step on a T4 with
+Qwen2.5-7B, but the real run's session 1 (2026-10-15) ran at **4.5 s/step**
+(8,192 steps in 36,723 s ≈ 10.2 h). Phase 2+ adds multi-tool tiers with
+longer episodes, so from session 2 on use `--stop-after-updates 7`
+(≈ 9 h) to stay clear of Kaggle's 12 h cap.
 
 ---
 

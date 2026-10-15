@@ -288,3 +288,18 @@ Template per entry:
   `tests/demo/` 66 passed. ruff clean on all new/changed demo code (older
   test files still carry 18 pre-existing unused-import warnings, untouched).
 - Next: after the Kaggle run, KAGGLE.md section 6 → real `demo_data/`.
+
+## 2026-10-15 — Real run, session 1 (W&B summary at step 8,192)
+- 8 updates, 36,723 s → 4.5 s/step (pilot: 3.7). Ends in Phase 1; Phase 2
+  (tiers 1–4) begins at the first update of session 2 (boundary 7,372).
+- Training metrics (training tasks with exploration — not a held-out result):
+  success 0.84 (tier 1 0.92, tier 2 0.74; pilot under the old reward: 0.62),
+  mean episode reward 8.6, value_loss 13.2 (pilot 33.0), entropy 0.83.
+- Behaviour: TERMINATE 56% of actions with +9.4 mean step reward (used as
+  "answer now", mostly correct — its schema has a `reasoning` field);
+  SQL_QUERY 21% with 0% invalid params; CALCULATOR 1.8% (11% invalid,
+  −1.56 mean step reward — the 7B does this arithmetic directly);
+  CLARIFY 1.7% at −0.5 (ADR-20 fix working, no farming).
+- Watch in session 2: tier-3/4 success as Phase 2 adds multi-tool tasks; if
+  flat while entropy keeps falling, raise the entropy coefficient.
+- Next: session 2 from checkpoint_step_8192.pt with --stop-after-updates 7.
