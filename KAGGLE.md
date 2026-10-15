@@ -86,23 +86,46 @@ checkpoint dir so the history stays in one file:
 
 ## 3b. Resume (every later session)
 
-Add the previous notebook's output as an input (Add Input → Your Work →
-Notebooks), find the newest checkpoint, and resume. The W&B run id is read
-from the checkpoint, so all sessions land in the **same** W&B run.
+Attach the previous session's checkpoints (its notebook output, or a dataset
+you made from them) via Add Input. Kaggle's mount paths vary, so find the
+newest checkpoint with a search instead of a fixed path (this also picks up
+files still in /kaggle/working if persistence kept them):
 
 ```python
-!ls -t /kaggle/input/*/checkpoints/ | head
+import glob, os, shutil
+
+ckpts = glob.glob("/kaggle/input/**/checkpoint_step_*.pt", recursive=True) \
+      + glob.glob("/kaggle/working/checkpoints/checkpoint_step_*.pt")
+step = lambda p: int(p.rsplit("_", 1)[1].split(".")[0])
+latest = max(ckpts, key=step)
+print("found:", sorted(ckpts, key=step))
+print("RESUME FROM:", latest)
+
+os.makedirs("/kaggle/working/checkpoints", exist_ok=True)
+m = "/kaggle/working/checkpoints/metrics.jsonl"
+if not os.path.exists(m):
+    found = glob.glob("/kaggle/input/**/metrics.jsonl", recursive=True)
+    print("metrics.jsonl found:", found)
+    if found:
+        shutil.copy(found[0], m)
 ```
+
+**Check `RESUME FROM` is the step you expect before training.** Then
+(the W&B run id is read from the checkpoint, so all sessions land in the
+same W&B run):
 
 ```python
 !python scripts/train.py \
     --model-name Qwen/Qwen2.5-7B-Instruct --device cuda \
     --total-steps 24576 --rollout-steps 1024 \
     --checkpoint-dir /kaggle/working/checkpoints --checkpoint-interval 1 \
-    --stop-after-updates 8 \
+    --stop-after-updates 7 \
     --wandb-project atar-training --wandb-mode online \
-    --resume-from /kaggle/input/<PREVIOUS-NOTEBOOK>/checkpoints/checkpoint_step_<N>.pt
+    --resume-from {latest}
 ```
+
+The log must say "Resumed from … at step N". A training cell **without**
+`--resume-from` starts a new run from step 0 — never run the 3a cell again.
 
 `--total-steps` and `--rollout-steps` must be the same in every session
 (they define the curriculum boundaries and the LR schedule).
