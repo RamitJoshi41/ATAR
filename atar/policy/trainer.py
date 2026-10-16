@@ -34,10 +34,16 @@ from atar.policy.rollout_buffer import RolloutBuffer
 from atar.policy.collector import VectorizedCollector
 from atar.policy.curriculum import CurriculumManager
 from atar.policy.ppo_stubs import compute_ppo_loss, compute_gae
-from atar.policy.types import CheckpointState, CurriculumPhase, RolloutBatch
+from atar.policy.types import (
+    TRAINING_SETUP_VERSION, CheckpointState, CurriculumPhase, RolloutBatch,
+)
 from atar.shared.shared_types import SEMANTIC_RANGE
 
 logger = logging.getLogger(__name__)
+
+
+class CheckpointSetupMismatchError(RuntimeError):
+    """The checkpoint belongs to a run with a different reward / task set."""
 
 
 class PPOTrainer:
@@ -281,6 +287,7 @@ class PPOTrainer:
             remaining = stop_at - self._global_step
             n_steps = min(self._rollout_steps, remaining)
             buffer, collection_stats = self._collector.collect(n_steps=n_steps)
+            param_error_examples = collection_stats.pop("param_error_examples", None)
             self._global_step += len(buffer)
 
             # ── GAE + PPO update ───────────────────────────────────────────
@@ -300,8 +307,11 @@ class PPOTrainer:
             # Plain-file copy of every update's metrics, next to the
             # checkpoints, so the full history survives without W&B access.
             # Written BEFORE the W&B call, which is best-effort (see _wandb).
+            record = dict(log_dict)
+            if param_error_examples:
+                record["param_error_examples"] = param_error_examples
             with open(self._checkpoint_dir / "metrics.jsonl", "a") as fh:
-                fh.write(json.dumps(log_dict) + "\n")
+                fh.write(json.dumps(record) + "\n")
             self._wandb(lambda: self._run.log(log_dict, step=self._global_step))
 
             # ── Periodic checkpointing ─────────────────────────────────────
@@ -431,6 +441,7 @@ class PPOTrainer:
             scheduler_state_dict=self._scheduler.state_dict(),
             projection_state_dict=self._llm.projection.state_dict(),
             wandb_run_id=getattr(self._run, "id", None),
+            training_setup_version=TRAINING_SETUP_VERSION,
         )
         path = self._checkpoint_dir / f"checkpoint_{tag}.pt"
         torch.save(ckpt.__dict__, path)
@@ -469,6 +480,16 @@ class PPOTrainer:
             Path to the checkpoint .pt file.
         """
         ckpt = self.load_checkpoint(path)
+        if ckpt.training_setup_version != TRAINING_SETUP_VERSION:
+            # Fail closed: continuing a policy trained under another reward /
+            # task set would mix two different problems in one run.
+            raise CheckpointSetupMismatchError(
+                f"{path} was trained under training setup "
+                f"{ckpt.training_setup_version!r}, this code is "
+                f"{TRAINING_SETUP_VERSION!r} (see TRAINING_SETUP_VERSION in "
+                "atar/policy/types.py). Start a fresh run, or resume from a "
+                "checkpoint of the current run."
+            )
         self._policy.load_state_dict(ckpt.policy_state_dict)
         if ckpt.projection_state_dict is not None:
             self._llm.projection.load_state_dict(ckpt.projection_state_dict)

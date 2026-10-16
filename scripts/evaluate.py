@@ -198,7 +198,9 @@ def main() -> int:
     # prompt), so old per-task results are not resumed into new ones.
     base_fp = {
         "model_name": args.model_name, "seed": args.seed,
-        "grader": "answer_matching_v2", "agent_version": "2026-10-14",
+        "grader": "answer_matching_v2", "agent_version": "2026-10-16",
+        # Results graded against a different test set are not comparable.
+        "tasks_sha256": _sha256(str(Path(args.data_dir) / "tasks_test.jsonl")),
     }
     fingerprints: dict[str, dict] = {}
 

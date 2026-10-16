@@ -494,3 +494,90 @@ prompt changed the eval fingerprint (`agent_version`), so old ReAct results
 can't be resumed into new ones. Discovered while building it: the test set
 is sorted by tier, so the old `--max-tasks N` smoke runs evaluated tier 1
 only.
+
+## ADR-22: No answer is graded as a wrong answer (−5), not 0
+**Date:** 2026-10-16
+**Decision:** An episode that reaches the turn limit without a final answer
+(or ends with an empty one) gets the same −5 accuracy reward as a wrong
+answer (`_ACCURACY_TRUNCATED = _ACCURACY_INCORRECT` in `atar_env.py`). This
+amends the M5 MSD, which specified 0.
+**Context:** Greedy replays of `checkpoint_step_15360` (4 held-out tasks per
+tier, 2026-10-16) answered 10 of 20 correctly. **All 10 failures** were the
+policy repeating CLARIFY until the 5-turn limit (CLARIFY probability ~0.94
+each turn); not one was a wrong answer. Under the M5 reward that is
+rational: five CLARIFYs cost 5 × −0.5 = −2.5, a wrong answer costs −5, so
+whenever the policy's chance of being right is below ~1/6, stalling has the
+higher expected return. The critic had learned exactly this (value ≈ −3.4
+falling to −0.5 along a stall). The behaviour even appeared with the answer
+in hand: on a tier-5 task the policy read salary 80000 from SQL, then
+stalled instead of answering.
+**Alternatives considered:**
+- Raise the per-CLARIFY cost (rejected: treats the symptom; any cheap
+  non-answer action could be used to stall).
+- A per-turn time penalty (rejected: it penalises legitimate multi-step
+  tasks as much as stalling, and still leaves "no answer" cheaper than a
+  wrong one at the end of the episode).
+**Consequence:** Stalling to the turn limit now costs at least −5 −0.5 × turns,
+which is always worse than committing to an answer, so the policy has to
+answer when unsure (an answer can still be right; silence never is). The
+evaluation metrics are unaffected (accuracy counts correct answers).
+
+## ADR-23: CLARIFY may be used once per episode (action mask)
+**Date:** 2026-10-16
+**Decision:** `ATARPolicy.forward` masks CLARIFY (logit → dtype minimum,
+probability 0) once the state's CLARIFY tool-history flag (state index
+384 + 5) is set. The env and its `Discrete(7)` action space are unchanged.
+**Context:** The env answers every CLARIFY of an episode with the same text
+(the task's `clarification_answer`, or "No further information available."),
+so a second CLARIFY can never add information. Yet in the diagnostic the
+policy repeated it up to 5 times, including on tier-4 tasks right after
+the first CLARIFY had returned exactly what was missing ("14 percent of
+902"). ADR-22 removes the incentive to stall; the mask removes a dead-end
+action, so exploration after a CLARIFY is spent on actions that can work.
+**Alternatives considered:**
+- Mask in the env (reject the action) — rejected: the env would have to
+  return something for an illegal action, and the baselines share the env.
+- Rely on ADR-22 alone — rejected: the collapsed policy needs many updates
+  to unlearn a 0.94-probability habit, while repeating CLARIFY is never
+  useful by construction.
+**Consequence:** The mask is computed from the policy's own input, so the
+rollout sampler, the PPO loss (log-probs recomputed from stored states),
+greedy evaluation and the demo's probability charts all apply it with no
+extra plumbing; old checkpoints still load (no new parameters). Masked
+log-probs/entropy stay finite (`tests/policy/test_action_mask.py`).
+
+## ADR-24: Restart the real run under a versioned training setup
+**Date:** 2026-10-16
+**Decision:** The real run restarts from step 0 with ADR-22, ADR-23 and the
+fixed tier-3 data. Checkpoints now record `training_setup_version`
+(`TRAINING_SETUP_VERSION = "2026-10-16"` in `atar/policy/types.py`);
+`PPOTrainer.restore_from_checkpoint` and `scripts/train.py` refuse to
+resume a checkpoint from another setup (fail closed, before the model
+loads). Evaluation fingerprints gain the test set's SHA-256.
+**Context:** Besides the stalling reward, the diagnostic exposed a data bug:
+the tier-3 template "...capital of France and write a python script that
+prints its length" computed its ground truth as the length of the whole
+search snippet ("The capital of France is Paris, located in Europe." → 50)
+instead of the capital's name (5). 53 of 200 tier-3 training tasks (27%) and
+14 of 50 tier-3 test tasks were impossible for a correct agent — part of
+why tier 3 sat at ~0.57. The generator is deterministic (regenerating with
+the old code reproduced both files byte for byte), so the fix changes
+exactly those 67 rows (`ground_truth` and the chain in `metadata`).
+**Alternatives considered:**
+- Resume from `checkpoint_step_15360` (2 sessions instead of 4) —
+  rejected: that policy spent 7 updates collapsing into the stall
+  (entropy 0.35, CLARIFY ~0.9 on tiers 3–5), its critic is calibrated to the
+  old reward, and the cosine LR is already down to ~1e-4 of 3e-4, so the
+  remaining 9 updates would mostly be spent unlearning. It would also make
+  the demo's learning curve mix two different problems. Same reasoning as
+  ADR-20's restart after the pilot.
+- Rely on the KAGGLE.md checkpoint search alone to avoid picking an old-run
+  checkpoint — rejected: the old run's step 15,360 outranks a new run's
+  early checkpoints in a "newest step" search; a code-level guard can't be
+  forgotten.
+**Consequence:** ~4 Kaggle sessions (8 + 7 + 7 + 2 updates, ≈31 GPU-hours at
+4.5 s/step) for the 24,576-step plan. Old-run checkpoints remain usable for
+replays/evaluation (loading for inference is not blocked), but not for
+resuming. Training logs also gain up to 3 rejected-parameter examples per
+action per rollout in `metrics.jsonl` (`param_error_examples`) to diagnose
+the 50–78% CALCULATOR rejection rate seen in session 2.

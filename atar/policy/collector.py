@@ -52,6 +52,8 @@ from atar.shared.shared_types import (
 
 logger = logging.getLogger(__name__)
 
+MAX_PARAM_ERROR_EXAMPLES: int = 3   # per action, per rollout
+
 
 class VectorizedCollector:
     """
@@ -133,6 +135,9 @@ class VectorizedCollector:
         # (tier, action) step counts: shows whether e.g. CLARIFY is used on the
         # ambiguous tier-4 tasks or everywhere.
         self._tier_action_counts: dict[int, np.ndarray] = {}
+        # A few rejected LLM outputs per action, so a high invalid_param_rate
+        # can be diagnosed from metrics.jsonl without re-running anything.
+        self._param_error_examples: dict[str, list[dict[str, Any]]] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -189,6 +194,7 @@ class VectorizedCollector:
         self._action_reward_sum[:] = 0.0
         self._action_invalid[:] = 0
         self._tier_action_counts = {}
+        self._param_error_examples = {}
         total_steps_collected = 0
 
         while total_steps_collected < steps:
@@ -240,6 +246,13 @@ class VectorizedCollector:
                 self._action_reward_sum[action_int] += reward_float
                 if not info.get("params_valid", True):
                     self._action_invalid[action_int] += 1
+                    examples = self._param_error_examples.setdefault(ActionType(action_int).name, [])
+                    if len(examples) < MAX_PARAM_ERROR_EXAMPLES:
+                        examples.append({
+                            "tier": int(info.get("task_tier", -1)),
+                            "error": str(info.get("param_error"))[:300],
+                            "params": repr(info.get("rejected_params"))[:300],
+                        })
                 tier = int(info.get("task_tier", -1))
                 self._tier_action_counts.setdefault(
                     tier, np.zeros(len(ActionType), dtype=np.int64)
@@ -360,4 +373,7 @@ class VectorizedCollector:
                 stats[f"action_frac_by_tier/tier_{tier}/{action.name}"] = float(
                     counts[action.value] / n_tier
                 )
+        if self._param_error_examples:
+            # Text, not a metric: the trainer writes it to metrics.jsonl only.
+            stats["param_error_examples"] = self._param_error_examples
         return stats

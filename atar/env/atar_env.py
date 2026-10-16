@@ -65,7 +65,10 @@ MAX_TOKENS_NORMALIZER: int = 10_000   # normalises cumulative token count
 # Reward component magnitudes (MSD section "Reward function")
 _ACCURACY_CORRECT: float = 10.0
 _ACCURACY_INCORRECT: float = -5.0
-_ACCURACY_TRUNCATED: float = 0.0
+# No answer counts as a wrong answer (ADR-22).  The MSD's original 0 made
+# stalling until the turn limit cheaper than answering: 5 x CLARIFY cost
+# -2.5, a wrong answer -5, so the policy learned to stall when unsure.
+_ACCURACY_TRUNCATED: float = _ACCURACY_INCORRECT
 
 _EFFICIENCY_PER_TOOL_CALL: float = -0.5
 _EFFICIENCY_PER_1K_TOKENS: float = -0.1
@@ -362,6 +365,7 @@ class ATAREnv(gymnasium.Env):
         params_valid = True   # set by each branch from M4's validate()
         step_params: dict | None = None    # validated params (for M8 replays)
         param_error: str | None = None     # M4's rejection reason, if any
+        rejected_params: Any = None        # the LLM output M4 rejected
 
         # Reward components accumulators
         acc_accuracy: float = 0.0
@@ -386,6 +390,7 @@ class ATAREnv(gymnasium.Env):
                 step_params = dict(params_or_err)  # type: ignore[arg-type]
             else:
                 param_error = str(params_or_err)
+                rejected_params = response
 
             if not valid:
                 # Safety penalty for invalid params
@@ -415,6 +420,7 @@ class ATAREnv(gymnasium.Env):
                 step_params = dict(params_or_err)  # type: ignore[arg-type]
             else:
                 param_error = str(params_or_err)
+                rejected_params = response
 
             if not valid:
                 acc_safety += _SAFETY_INVALID_PARAMS
@@ -462,6 +468,7 @@ class ATAREnv(gymnasium.Env):
                 step_params = dict(params_or_err)  # type: ignore[arg-type]
             else:
                 param_error = str(params_or_err)
+                rejected_params = response
 
             if not valid:
                 acc_safety += _SAFETY_INVALID_PARAMS
@@ -511,7 +518,7 @@ class ATAREnv(gymnasium.Env):
         # ---- Truncation (turn limit reached) ---------------------------
         if not terminated and is_at_limit:
             truncated = True
-            # No accuracy bonus when truncated without an answer
+            # Truncated without an answer: graded as a wrong answer (ADR-22)
             acc_accuracy = _ACCURACY_TRUNCATED
 
         # ---- Build reward dataclass ------------------------------------
@@ -542,6 +549,7 @@ class ATAREnv(gymnasium.Env):
             "params_valid": params_valid,
             "params": step_params,
             "param_error": param_error,
+            "rejected_params": rejected_params,
             "cumulative_tokens": self._cumulative_tokens,
         }
 
@@ -638,7 +646,7 @@ class ATAREnv(gymnasium.Env):
     def _compute_accuracy_reward(self) -> float:
         """
         Compare self._final_answer against the task's ground truth.
-        Returns +10 for correct, -5 for incorrect, 0 if no answer.
+        Returns +10 for correct, -5 for incorrect or no answer (ADR-22).
         """
         if self._final_answer is None or self._task is None:
             return _ACCURACY_TRUNCATED

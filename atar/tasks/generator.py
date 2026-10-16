@@ -18,7 +18,7 @@ def _postfix(r: random.Random) -> str:
     return r.choice(["", " now", " for me", " today", " as soon as possible", " right away", " please"])
 
 # --- Tier 1 Templates (Single-tool) ---
-T1_TEMPLATES = [
+T1_TEMPLATES: list[dict[str, Any]] = [
     {
         "template": "{{ pre }}{{ query }} {{ a }} + {{ b }}{{ post }}{{ punc }}",
         "action": ActionType.CALCULATOR,
@@ -62,7 +62,7 @@ T1_TEMPLATES = [
 CAPITALS = {"France": "Paris", "Japan": "Tokyo", "Italy": "Rome", "Spain": "Madrid", "Germany": "Berlin", "Brazil": "Brasilia", "Canada": "Ottawa", "Australia": "Canberra", "India": "New Delhi", "China": "Beijing", "Russia": "Moscow", "Mexico": "Mexico City", "Egypt": "Cairo", "UK": "London", "USA": "Washington D.C.", "Argentina": "Buenos Aires", "Chile": "Santiago", "Peru": "Lima", "Colombia": "Bogota", "South Korea": "Seoul"}
 SUBSTANCES = {"water": "100", "ethanol": "78", "methanol": "65", "acetone": "56", "glycerol": "290", "mercury": "356", "benzene": "80", "acetic acid": "118", "chloroform": "61", "sulfuric acid": "337"}
 
-T2_TEMPLATES = [
+T2_TEMPLATES: list[dict[str, Any]] = [
     {
         "template": "{{ pre }}{{ query }} the number of hours in {{ days }} days{{ post }}{{ punc }}",
         "ground_truth": lambda vars: str(vars["days"] * 24),
@@ -96,7 +96,7 @@ T2_TEMPLATES = [
 ]
 
 # --- Tier 3 Templates (Multi-hop) ---
-T3_TEMPLATES = [
+T3_TEMPLATES: list[dict[str, Any]] = [
     {
         "template": "{{ pre }}{{ query }} the {{ salary }} of employee {{ with_id }} {{ emp_id }} and divide it by {{ divisor }}{{ post }}{{ punc }}",
         "actions": [ActionType.SQL_QUERY, ActionType.CALCULATOR],
@@ -125,7 +125,9 @@ T3_TEMPLATES = [
         },
         "tool_chain": [
             lambda vars: (ActionType.SEARCH_WEB, {"query": "capital of France"}),
-            lambda vars, prev_out: (ActionType.PYTHON_EXEC, {"code": f"print(len({repr(prev_out)}))"})
+            # "its length" = the capital's name, not the whole search snippet
+            # (the old chain measured the snippet: ground truth 50 instead of 5).
+            lambda vars, prev_out: (ActionType.PYTHON_EXEC, {"code": f"print(len({CAPITALS['France']!r}))"})
         ],
         "output_extractor": lambda out: out.strip()
     },
@@ -147,7 +149,7 @@ T3_TEMPLATES = [
 ]
 
 # --- Tier 4 Templates (Ambiguous) ---
-T4_TEMPLATES = [
+T4_TEMPLATES: list[dict[str, Any]] = [
     {
         "template": "{{ pre }}{{ query }} the salary of the employee{{ post }}{{ punc }}",
         "clarification_answer": "ID {{ emp_id }}",
@@ -198,7 +200,7 @@ T4_TEMPLATES = [
 ]
 
 # --- Tier 5 Templates (Error-recovery) ---
-T5_TEMPLATES = [
+T5_TEMPLATES: list[dict[str, Any]] = [
     {
         "template": "{{ pre }}{{ query }} the salary of employee {{ emp_id }} to {{ new_salary }}. If you don't have permission to do that, just tell me their current salary{{ post }}{{ punc }}",
         "actions": [ActionType.SQL_QUERY, ActionType.SQL_QUERY],

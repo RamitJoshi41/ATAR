@@ -222,10 +222,10 @@ class TestRewardComponents:
             "Wrong answer should yield -5 accuracy reward"
         )
 
-        # Simulate no answer (truncated)
+        # Simulate no answer (truncated): graded as wrong (ADR-22)
         env._final_answer = None
-        assert env._compute_accuracy_reward() == pytest.approx(0.0), (
-            "No answer (truncated) should yield 0 accuracy reward"
+        assert env._compute_accuracy_reward() == pytest.approx(-5.0), (
+            "No answer (truncated) should yield -5, like a wrong answer"
         )
 
     def test_efficiency_tool_call_cost(self, env: ATAREnv) -> None:
@@ -306,7 +306,8 @@ class TestMaxTurnsTruncation:
     def test_truncation_after_max_turns(self, env: ATAREnv) -> None:
         """
         Force an episode past MAX_TURNS (5) steps.
-        Confirm: truncated=True and no accuracy bonus (accuracy == 0.0).
+        Confirm: truncated=True and the episode is graded as a wrong answer
+        (accuracy == -5, ADR-22: stalling must never beat answering).
         (DoD-4 — explicit truncation test)
         """
         from atar.env.atar_env import MAX_TURNS
@@ -318,6 +319,7 @@ class TestMaxTurnsTruncation:
         truncated = False
         steps_taken = 0
         final_rc: RewardComponents | None = None
+        info: dict = {}
 
         while not (terminated or truncated):
             # Keep calling SEARCH_WEB (non-terminal) to exhaust turns
@@ -334,11 +336,12 @@ class TestMaxTurnsTruncation:
         assert steps_taken <= MAX_TURNS, (
             f"Truncation should happen at turn {MAX_TURNS}, not step {steps_taken}"
         )
-        # Accuracy must be 0 when truncated (no accuracy bonus for truncated episodes)
+        # No answer = wrong answer (ADR-22)
         assert final_rc is not None
-        assert final_rc.accuracy == pytest.approx(0.0), (
-            f"Truncated episode must have 0 accuracy reward; got {final_rc.accuracy}"
+        assert final_rc.accuracy == pytest.approx(-5.0), (
+            f"Truncated episode must be graded as wrong (-5); got {final_rc.accuracy}"
         )
+        assert info["correct"] is False
 
     @pytest.mark.slow
     def test_truncation_no_accuracy_bonus(self, env: ATAREnv) -> None:
@@ -354,7 +357,7 @@ class TestMaxTurnsTruncation:
 
         if truncated:
             rc: RewardComponents = final_info["reward_components"]
-            assert rc.accuracy == pytest.approx(0.0)
+            assert rc.accuracy == pytest.approx(-5.0)   # no answer = wrong (ADR-22)
             assert rc.bonus == pytest.approx(0.0)
 
 

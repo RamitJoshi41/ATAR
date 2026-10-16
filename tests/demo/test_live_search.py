@@ -19,12 +19,6 @@ class _Resp(io.BytesIO):
         super().__init__(body)
         self.status = status
 
-    def __enter__(self) -> "_Resp":
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self.close()
-
 
 def _opener(body: bytes, status: int = 200, seen: list | None = None):
     def open_(request, timeout):  # noqa: ANN001 - urlopen signature

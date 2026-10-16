@@ -425,6 +425,35 @@ See `KAGGLE.md` for the runbook.
 `venv/bin/python3 -m pytest tests/ atar/tests` — **379 passed, 0 failed** (8 min 58 s).
 
 
+## 2026-10-16 fixes (diagnostic of real run 1 at step 15,360)
+
+Session 2 of the real run showed tier-3/4 success flat and CLARIFY at ~half
+of all actions. Before training further, 20 held-out episodes of
+`checkpoint_step_15360` were recorded (greedy, 4 per tier, the 7B on
+Kaggle). Result: **10/20 correct, and all 10 failures were the policy
+repeating CLARIFY until the 5-turn limit** — never a wrong answer.
+
+| Finding | Cause | Fix |
+|---|---|---|
+| Stalling instead of answering | M5 reward: truncated without answer = 0, wrong answer = −5; five CLARIFYs cost only −2.5, so stalling paid whenever the policy was <~1/6 sure | no answer = −5, like a wrong answer (ADR-22; M5 MSD amended) |
+| CLARIFY repeated up to 5× — even right after the clarification answered the question ("14 percent of 902") | a repeated CLARIFY gets the same answer, but nothing stopped it | the policy masks CLARIFY after its first use, read from the state's tool-history flag (ADR-23) |
+| 27% of tier-3 tasks impossible | template "...capital of France and write a python script that prints its length" measured the whole search snippet: ground truth 50 instead of len("Paris") = 5 | template fixed; data regenerated — exactly the 53 train + 14 test rows changed (the generator is deterministic) |
+| CALCULATOR params rejected 50–78% of the time, reasons unknown | rejection reasons weren't logged | `info["rejected_params"]` + up to 3 `param_error_examples` per action per rollout in `metrics.jsonl` |
+
+**Consequence:** run 1 stops at step 15,360; run 2 restarts from step 0
+under `TRAINING_SETUP_VERSION = "2026-10-16"` in `checkpoints_v2/`
+(ADR-24). Checkpoints record their setup version and `train.py` refuses to
+resume a checkpoint from another setup before loading the model. Evaluation
+fingerprints now include the test set's SHA-256.
+
+Also on 2026-10-16: pyright and Pyrefly both report **0 errors** across
+`atar/`, `scripts/`, `tests/` (were 189 / several): mostly annotations, plus
+`lr` logged as a plain float and an empty-field check in the demo's live mode.
+
+**What actually happened when run (stand-in model, CPU, one test file at a
+time — the all-at-once run is OOM-killed on the 15 GB laptop):** see
+TIMELINE 2026-10-16 for per-file counts; 0 failures.
+
 ---
 
 ## M8: Streamlit Demo (`atar/demo/`)

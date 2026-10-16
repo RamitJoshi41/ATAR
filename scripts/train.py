@@ -312,6 +312,20 @@ def main() -> int:
     from atar.llm.llm_interface import LLMInterface
     from atar.policy import ATARPolicy, PPOTrainer
 
+    # ── Check the checkpoint BEFORE the slow model load ───────────────────
+    resume_ckpt = None
+    if args.resume_from is not None:
+        from atar.policy.types import TRAINING_SETUP_VERSION
+        resume_ckpt = PPOTrainer.load_checkpoint(args.resume_from)
+        if resume_ckpt.training_setup_version != TRAINING_SETUP_VERSION:
+            logger.error(
+                "%s belongs to training setup %r but this code is %r (reward, "
+                "action mask or task set changed). It cannot be resumed: start a "
+                "fresh run (no --resume-from) or pick a checkpoint of the current run.",
+                args.resume_from, resume_ckpt.training_setup_version, TRAINING_SETUP_VERSION,
+            )
+            return 1
+
     # ── Load model ───────────────────────────────────────────────────────
     logger.info("Loading LLM: %s ...", args.model_name)
     llm = LLMInterface(model_name=args.model_name, device=args.device)
@@ -322,8 +336,8 @@ def main() -> int:
 
     # ── W&B run id (continue the same run across sessions) ────────────────
     wandb_run_id = args.wandb_run_id
-    if wandb_run_id is None and args.resume_from is not None:
-        wandb_run_id = PPOTrainer.load_checkpoint(args.resume_from).wandb_run_id
+    if wandb_run_id is None and resume_ckpt is not None:
+        wandb_run_id = resume_ckpt.wandb_run_id
         if wandb_run_id:
             logger.info("Continuing W&B run id from checkpoint: %s", wandb_run_id)
 

@@ -62,6 +62,14 @@ class PPOLossOutput:
     total_loss: torch.Tensor
 
 
+# Identifies the training problem (reward function, action mask, task set).
+# Bump it whenever a change makes old checkpoints a different problem;
+# PPOTrainer refuses to resume across versions.
+#   2026-10-16: no answer = wrong answer (ADR-22), CLARIFY once per episode
+#               (ADR-23), fixed tier-3 "capital length" ground truths.
+TRAINING_SETUP_VERSION: str = "2026-10-16"
+
+
 @dataclass
 class CheckpointState:
     """
@@ -81,3 +89,6 @@ class CheckpointState:
     # W&B run id so a resumed session (e.g. a new Kaggle notebook) logs to
     # the same run instead of starting a new one.
     wandb_run_id: str | None = None
+    # TRAINING_SETUP_VERSION the checkpoint was trained under.  None for
+    # checkpoints written before the field existed (2026-10-16).
+    training_setup_version: str | None = None

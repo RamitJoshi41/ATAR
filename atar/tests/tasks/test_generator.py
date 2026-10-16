@@ -96,3 +96,22 @@ def test_ground_truth_verification():
                 
             assert recalculated_truth == t.ground_truth
 
+
+
+def test_capital_length_tasks_expect_the_length_of_the_capital_name():
+    # Regression: the chain used to measure the whole search snippet
+    # ("The capital of France is Paris, located in Europe." -> 50), so a
+    # correct answer (len("Paris") = 5) was graded wrong on ~27% of tier 3.
+    import json
+    from pathlib import Path
+
+    tasks = generate_tasks(3, 60, seed=7)
+    length_tasks = [t for t in tasks if "prints its length" in t.query]
+    assert length_tasks
+    assert {t.ground_truth for t in length_tasks} == {"5"}
+
+    data_dir = Path(__file__).resolve().parents[3] / "data"
+    for name in ("tasks_train.jsonl", "tasks_test.jsonl"):
+        rows = [json.loads(line) for line in (data_dir / name).read_text().splitlines()]
+        committed = {r["ground_truth"] for r in rows if "prints its length" in r["query"]}
+        assert committed == {"5"}, f"{name} still has stale ground truths: {committed}"

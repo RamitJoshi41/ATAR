@@ -26,6 +26,7 @@ from atar.llm.llm_interface import LLMInterface
 from atar.policy.policy_network import ATARPolicy
 from atar.policy.trainer import PPOTrainer
 from atar.policy.types import CheckpointState, CurriculumPhase
+from atar.shared.shared_types import ActionType
 
 STAND_IN_MODEL = "Qwen/Qwen2.5-0.5B-Instruct"
 
@@ -507,3 +508,57 @@ def test_wandb_init_failure_falls_back_to_disabled(
     trainer.train()
     assert trainer._global_step == 8
     assert (tmp_path / "ck" / "checkpoint_step_8.pt").exists()
+
+
+def test_resume_refuses_a_checkpoint_from_another_training_setup(
+    llm: LLMInterface, data_dir: Path, tmp_path: Path
+) -> None:
+    """
+    A checkpoint trained under a different reward / task set (e.g. the
+    pre-2026-10-16 run) must not be resumed into the current run: fail closed.
+    """
+    from atar.policy.trainer import CheckpointSetupMismatchError
+    from atar.policy.types import TRAINING_SETUP_VERSION
+
+    common: dict[str, Any] = dict(
+        llm=llm, data_dir=str(data_dir), n_envs=2, rollout_steps=5,
+        total_steps=20, checkpoint_dir=str(tmp_path / "ck"), wandb_mode="offline",
+    )
+    path = PPOTrainer(policy=ATARPolicy(), **common).save_checkpoint(tag="v")
+    assert PPOTrainer.load_checkpoint(path).training_setup_version == TRAINING_SETUP_VERSION
+
+    raw = torch.load(path, map_location="cpu", weights_only=False)
+    raw.pop("training_setup_version")              # as written by the old code
+    old_path = tmp_path / "old_run.pt"
+    torch.save(raw, old_path)
+
+    trainer = PPOTrainer(policy=ATARPolicy(), **common)
+    with pytest.raises(CheckpointSetupMismatchError, match="training setup"):
+        trainer.restore_from_checkpoint(old_path)
+    assert trainer._global_step == 0               # nothing was restored
+
+
+def test_param_error_examples_go_to_metrics_jsonl_not_wandb(
+    llm: LLMInterface, data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ckpt_dir = tmp_path / "ckpts_examples"
+    trainer = PPOTrainer(
+        policy=ATARPolicy(), llm=llm, data_dir=str(data_dir), n_envs=2,
+        rollout_steps=8, total_steps=50, batch_size=4, epochs_per_update=1,
+        checkpoint_dir=str(ckpt_dir), wandb_mode="offline", stop_after_updates=1,
+    )
+    # Every tool call gets parameters M4 rejects.
+    for env in trainer._collector._envs:
+        env._generate_params = lambda conditioned: {"expression": "salary / 4"}  # type: ignore[method-assign]
+    logged: list[dict] = []
+    monkeypatch.setattr(trainer._run, "log", lambda d, step=None: logged.append(d))
+    trainer.train()
+
+    record = json.loads((ckpt_dir / "metrics.jsonl").read_text().splitlines()[0])
+    examples = record["param_error_examples"]
+    assert examples, "no rejected-param examples recorded"
+    for action, items in examples.items():
+        assert action in {a.name for a in ActionType}
+        assert 1 <= len(items) <= 3
+        assert {"tier", "error", "params"} <= items[0].keys()
+    assert logged and "param_error_examples" not in logged[0]

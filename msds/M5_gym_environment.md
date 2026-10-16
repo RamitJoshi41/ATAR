@@ -42,7 +42,8 @@ class ATAREnv(gymnasium.Env):
 
 ## Reward function (4 components — implement exactly, these are tuned)
 1. **Accuracy**: +10 correct final answer, -5 incorrect final answer, 0 if
-   episode truncated without an answer.
+   episode truncated without an answer. *(Amended 2026-10-16: no answer
+   = -5 — see "Amendments" at the end.)*
 2. **Efficiency**: -0.5 per tool call, -0.1 per 1,000 tokens consumed, -1.0
    extra for a redundant tool call (same action already used successfully
    this episode with no new information since).
@@ -80,3 +81,15 @@ shared/interfaces.md section 2.
 - [ ] `gymnasium.utils.env_checker.check_env(ATAREnv())` passes with no
   warnings.
 - [ ] `pytest tests/env/ -v` passes, report actual count.
+
+## Amendments
+Made during real training runs by the implementing agent, under the
+architect's delegation of training decisions; each has an ADR with the
+evidence.
+- **2026-10-14 (ADR-20):** the +1 CLARIFY safety bonus is paid only when
+  the task's solution requires CLARIFY, and only for the first CLARIFY of
+  the episode; any other CLARIFY costs the normal -0.5 tool-call penalty.
+- **2026-10-16 (ADR-22):** an episode truncated without an answer gets
+  -5 accuracy, the same as a wrong answer. With 0, stalling until the turn
+  limit (5 x -0.5 = -2.5) was cheaper than a wrong answer (-5), and the
+  trained policy learned to stall instead of answering.

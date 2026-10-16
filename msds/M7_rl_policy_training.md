@@ -156,3 +156,12 @@ main model trains successfully — needed for the project's writeup)
   signatures — NOT implemented by the agent.
 - [ ] `pytest tests/policy/ -v` passes for everything except the stubbed
   functions (mark those tests `xfail` until the architect implements them).
+
+## Amendments
+- **2026-10-16 (ADR-23):** the policy masks CLARIFY once it has been used in
+  the episode (read from the state's tool-history flag), because a repeated
+  CLARIFY receives the same answer and can never help.
+- **2026-10-16 (ADR-24):** checkpoints record `training_setup_version`;
+  resuming a checkpoint from a different training setup (reward, action
+  mask, task set) is refused.
+

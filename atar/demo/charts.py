@@ -69,7 +69,7 @@ def learning_curve_chart(curve: dict[str, Any], metric: str, tier: str) -> alt.L
     base = baseline_rows(curve, metric, tier)
     if base:
         bdf = pd.DataFrame(base)
-        bdf["label"] = bdf["baseline"].map(lambda b: BASELINE_LABELS.get(b, b))
+        bdf["label"] = bdf["baseline"].map(lambda b: BASELINE_LABELS.get(str(b), str(b)))
         names = list(bdf["label"])
         dashes = [BASELINE_DASHES.get(b, [4, 4]) for b in bdf["baseline"]]
         # Identity by dash pattern + legend (no in-chart text that collides

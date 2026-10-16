@@ -327,3 +327,43 @@ Template per entry:
   checkpoint_step_15360 (record_replays.py, 4 per tier) to see params,
   rejections and answers per tier; then decide the CLARIFY reward /
   exploration change. Phase 3 (tier 5) begins at the 2nd update of session 3.
+
+## 2026-10-16 — Diagnostic of step 15,360: stalling reward hole + tier-3 data bug; run 2
+- Diagnostic: `record_replays.py` on `checkpoint_step_15360`, 4 held-out tasks
+  per tier, greedy, Qwen2.5-7B on Kaggle (`diag_15360.jsonl`). 10/20 correct
+  (tier 1: 3/4, tier 2: 4/4, tier 3: 1/4, tier 4: 1/4, tier 5: 1/4). **All 10
+  failures were CLARIFY repeated until the 5-turn limit** (CLARIFY ≈ 0.94 per
+  turn), none was a wrong answer — including tier-4 tasks right after the
+  first CLARIFY returned the missing value, and a tier-5 task with the answer
+  (salary 80000) already retrieved by SQL.
+- Root cause 1 (reward): truncated-without-answer = 0 but wrong answer = −5,
+  so stalling (5 × −0.5 = −2.5) beat answering whenever the policy was <~1/6
+  sure. Fix: no answer = −5 (ADR-22, M5 MSD amended).
+- Root cause 2 (no guard against a useless action): CLARIFY now masked after
+  its first use, inside `ATARPolicy.forward` from the state's tool-history
+  flag (ADR-23).
+- Root cause 3 (data): the tier-3 "capital of France … prints its length"
+  template's ground truth was len(search snippet) = 50, not len("Paris") = 5
+  — 53/200 tier-3 train and 14/50 tier-3 test tasks impossible. Template
+  fixed; regenerated data differs in exactly those 67 rows (verified the old
+  generator reproduces the committed files byte for byte first).
+- Also: `info["rejected_params"]` and `param_error_examples` in metrics.jsonl
+  (diagnose CALCULATOR's 50–78% rejections next time); checkpoints carry
+  `training_setup_version` and resume across setups is refused (in
+  `train.py` before the model loads); eval fingerprint gains the test set's
+  SHA-256 and `agent_version` 2026-10-16. KAGGLE.md: run 2 in
+  `/kaggle/working/checkpoints_v2`, checkpoint search restricted to it.
+- Decision: restart as run 2 rather than resume (ADR-24): the step-15,360
+  policy had collapsed into the stall (entropy 0.35), its critic is fitted to
+  the old reward, and LR is already ~1/3 of peak. Cost ≈ 4 sessions
+  (8 + 7 + 7 + 2 updates).
+- Type checking: pyright 189 → 0 errors, Pyrefly → 0 errors across `atar/`,
+  `scripts/`, `tests/` (annotations; `lr` logged as float; empty-field guard
+  in the demo's live mode).
+- Tests (venv, one file at a time): new `tests/policy/test_action_mask.py` 3,
+  `tests/env/test_no_answer_reward.py` 3, +1 generator, +2 checkpointing;
+  tests/env 65 passed; tests/policy: checkpointing 16, collector 8,
+  baselines 6, curriculum 9, policy_network/ppo_stubs/ppo_fixes/
+  rollout_buffer/action_mask passed; tests/evaluation 55; tests/demo 66;
+  tests/llm 14; tests/translator 128; atar/tests 66. 0 failures.
+- Next: run 2, session 1 — KAGGLE.md 3a (fresh, `--stop-after-updates 8`).

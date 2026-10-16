@@ -11,10 +11,27 @@ Exact architecture from the M7 MSD:
 
 The optimizer parameter group in PPOTrainer includes BOTH ATARPolicy.parameters()
 AND M3's LLMInterface.projection.parameters() — the co-adapted projection design.
+
+Action masking (ADR-23): CLARIFY is allowed once per episode.  The env answers
+a repeated CLARIFY with the same text, so it can never add information; the
+2026-10-16 diagnostic showed the policy looping on it until the turn limit.
+The mask is read from the state's own tool-history flags, so the collector,
+the PPO loss and evaluation all apply the same mask with no extra plumbing.
 """
 
 import torch
 import torch.nn as nn
+
+from atar.shared.shared_types import TOOL_HISTORY_RANGE, ActionType
+
+_CLARIFY_USED_INDEX: int = TOOL_HISTORY_RANGE[0] + ActionType.CLARIFY.value
+
+
+def action_mask(state: torch.Tensor) -> torch.Tensor:
+    """(B, 7) bool, True = allowed.  Blocks CLARIFY once it has been used."""
+    mask = torch.ones(state.shape[0], len(ActionType), dtype=torch.bool, device=state.device)
+    mask[:, ActionType.CLARIFY.value] = state[:, _CLARIFY_USED_INDEX] < 0.5
+    return mask
 
 
 class ATARPolicy(nn.Module):
@@ -61,7 +78,9 @@ class ATARPolicy(nn.Module):
         Returns
         -------
         action_logits : torch.Tensor
-            Shape (B, 7) — raw logits (pass through Categorical for sampling).
+            Shape (B, 7) — logits (pass through Categorical for sampling).
+            Masked actions (see action_mask) get the dtype's minimum, i.e.
+            probability 0.
         value_estimate : torch.Tensor
             Shape (B, 1) — state value estimate.
         """
@@ -70,5 +89,8 @@ class ATARPolicy(nn.Module):
 
         features = self.backbone(state)          # (B, 128)
         action_logits = self.policy_head(features)   # (B, 7)
+        action_logits = action_logits.masked_fill(
+            ~action_mask(state), torch.finfo(action_logits.dtype).min
+        )
         value_estimate = self.value_head(features)   # (B, 1)
         return action_logits, value_estimate

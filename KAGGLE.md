@@ -32,6 +32,16 @@ os.environ["WANDB_API_KEY"] = UserSecretsClient().get_secret("WANDB_API_KEY")
 
 ## 3a. Start a NEW training run (first session only)
 
+**Run 2 starts here (2026-10-16).** Run 1 (sessions of 2026-10-15/16,
+steps 0–15,360, in `/kaggle/working/checkpoints`) is stopped: replays of its
+step-15,360 checkpoint showed the policy stalling with repeated CLARIFYs
+because "no answer" was cheaper than a wrong answer, and 27% of tier-3
+tasks had a wrong ground truth (ADR-22..24). Run 2 trains under the fixed
+setup and writes to **`/kaggle/working/checkpoints_v2`** so the two runs'
+files never mix. `train.py` refuses to resume a run-1 checkpoint anyway
+(it stops before loading the model with "belongs to training setup None").
+Keep the run-1 checkpoints only as history; they are not resumable.
+
 **Pilot: done 2026-10-14** (3 updates; it found the CLARIFY reward bug, see
 ADR-20 — so the real run starts fresh, not from the pilot checkpoint).
 For any future pilot: run a ~3 h pilot first — the same command as below but
@@ -40,7 +50,7 @@ check the W&B charts in section 4: if the action mix collapses to a single
 action or `success_rate` doesn't move, stop and debug. If it looks healthy,
 continue the same run with 3b (resume from the pilot's last checkpoint).
 
-Use a **new notebook** (or run `!rm -rf /kaggle/working/checkpoints` first)
+Use a **new notebook** (or run `!rm -rf /kaggle/working/checkpoints_v2` first)
 so the pilot's checkpoints don't mix with the real run's.
 
 Do **not** resume from the old `checkpoint_step_*` files or the pilot's: they were trained
@@ -51,7 +61,7 @@ with the GAE/returns/projection/grader bugs fixed on 2026-10-13
 !python scripts/train.py \
     --model-name Qwen/Qwen2.5-7B-Instruct --device cuda \
     --total-steps 24576 --rollout-steps 1024 \
-    --checkpoint-dir /kaggle/working/checkpoints --checkpoint-interval 1 \
+    --checkpoint-dir /kaggle/working/checkpoints_v2 --checkpoint-interval 1 \
     --stop-after-updates 8 \
     --wandb-project atar-training --wandb-mode online
 ```
@@ -70,18 +80,18 @@ Why these numbers:
   of 12; ≈ 25 GPU-hours ≈ 3 sessions, within one week of Kaggle's
   ~30 h/week quota. Curriculum phases switch at steps 7,372 and 17,203.
 
-When the cell finishes, make sure `/kaggle/working/checkpoints` survives the
+When the cell finishes, make sure `/kaggle/working/checkpoints_v2` survives the
 session the same way you carried checkpoints between notebooks before
 (saved notebook output or a Kaggle dataset), **and** download the newest
 `checkpoint_step_*.pt` as a backup. Also download
-`/kaggle/working/checkpoints/metrics.jsonl` (one line per update — the full
+`/kaggle/working/checkpoints_v2/metrics.jsonl` (one line per update — the full
 history) and send it for review after each session.
 
 When resuming, first copy the previous `metrics.jsonl` into the new
 checkpoint dir so the history stays in one file:
 
 ```python
-!mkdir -p /kaggle/working/checkpoints && cp /kaggle/input/<PREVIOUS-NOTEBOOK>/checkpoints/metrics.jsonl /kaggle/working/checkpoints/
+!mkdir -p /kaggle/working/checkpoints_v2 && cp /kaggle/input/<PREVIOUS-NOTEBOOK>/checkpoints_v2/metrics.jsonl /kaggle/working/checkpoints_v2/
 ```
 
 ## 3b. Resume (every later session)
@@ -94,17 +104,19 @@ files still in /kaggle/working if persistence kept them):
 ```python
 import glob, os, shutil
 
-ckpts = glob.glob("/kaggle/input/**/checkpoint_step_*.pt", recursive=True) \
-      + glob.glob("/kaggle/working/checkpoints/checkpoint_step_*.pt")
+# Only run-2 checkpoints (folder checkpoints_v2) — run 1 has higher step
+# numbers and would otherwise be picked (train.py would refuse it anyway).
+ckpts = glob.glob("/kaggle/input/**/checkpoints_v2/checkpoint_step_*.pt", recursive=True) \
+      + glob.glob("/kaggle/working/checkpoints_v2/checkpoint_step_*.pt")
 step = lambda p: int(p.rsplit("_", 1)[1].split(".")[0])
 latest = max(ckpts, key=step)
 print("found:", sorted(ckpts, key=step))
 print("RESUME FROM:", latest)
 
-os.makedirs("/kaggle/working/checkpoints", exist_ok=True)
-m = "/kaggle/working/checkpoints/metrics.jsonl"
+os.makedirs("/kaggle/working/checkpoints_v2", exist_ok=True)
+m = "/kaggle/working/checkpoints_v2/metrics.jsonl"
 if not os.path.exists(m):
-    found = glob.glob("/kaggle/input/**/metrics.jsonl", recursive=True)
+    found = glob.glob("/kaggle/input/**/checkpoints_v2/metrics.jsonl", recursive=True)
     print("metrics.jsonl found:", found)
     if found:
         shutil.copy(found[0], m)
@@ -118,7 +130,7 @@ same W&B run):
 !python scripts/train.py \
     --model-name Qwen/Qwen2.5-7B-Instruct --device cuda \
     --total-steps 24576 --rollout-steps 1024 \
-    --checkpoint-dir /kaggle/working/checkpoints --checkpoint-interval 1 \
+    --checkpoint-dir /kaggle/working/checkpoints_v2 --checkpoint-interval 1 \
     --stop-after-updates 7 \
     --wandb-project atar-training --wandb-mode online \
     --resume-from {latest}
@@ -151,10 +163,10 @@ keep `--total-steps 24576` — it's the original plan, not the new target):
 !python scripts/train.py \
     --model-name Qwen/Qwen2.5-7B-Instruct --device cuda \
     --total-steps 24576 --rollout-steps 1024 --extend-to 49152 \
-    --checkpoint-dir /kaggle/working/checkpoints --checkpoint-interval 1 \
+    --checkpoint-dir /kaggle/working/checkpoints_v2 --checkpoint-interval 1 \
     --stop-after-updates 8 \
     --wandb-project atar-training --wandb-mode online \
-    --resume-from /kaggle/input/<PREVIOUS-NOTEBOOK>/checkpoints/<newest checkpoint>.pt
+    --resume-from /kaggle/input/<PREVIOUS-NOTEBOOK>/checkpoints_v2/<newest checkpoint>.pt
 ```
 
 The first extension session resumes from `checkpoint_final.pt`; later ones
@@ -171,6 +183,9 @@ from the newest `checkpoint_step_*.pt`. The extension ends with
 | `mean_episode_reward` | trends up | trends down / stuck very negative (invalid-param penalties) |
 | `entropy` | decreases slowly | drops to ~0 in the first few updates |
 | `value_loss` | falls then plateaus | grows steadily |
+| `action_frac_by_tier/tier_k/CLARIFY` | high on tier 4 (ambiguous tasks) only | high on every tier (asking as a hedge — run 1's failure) |
+| `mean_episode_length` | well below 5 | creeping toward 5 (episodes hitting the turn limit = stalling) |
+| `param_error_examples` (in `metrics.jsonl` only, not W&B) | — | read these when an `invalid_param_rate/*` is high: they show what the LLM wrote and why M4 rejected it |
 | `curriculum_phase` | 1 → 2 at step ~7.4k, 2 → 3 at ~17.2k (first update boundary after each) | wrong phase after a resume |
 
 ## 5. Evaluate a checkpoint (after training, or any time)
@@ -184,7 +199,7 @@ Quick pipeline check (≈ 20–30 min):
 
 ```python
 !python scripts/evaluate.py \
-    --checkpoint /kaggle/working/checkpoints/checkpoint_step_<N>.pt \
+    --checkpoint /kaggle/working/checkpoints_v2/checkpoint_step_<N>.pt \
     --agents atar,zeroshot --max-tasks 20 \
     --model-name Qwen/Qwen2.5-7B-Instruct --device cuda \
     --out-dir /kaggle/working/eval_step<N>_smoke
@@ -196,7 +211,7 @@ safely into the same `--out-dir` as long as checkpoint/model/seed match):
 
 ```python
 !python scripts/evaluate.py \
-    --checkpoint /kaggle/working/checkpoints/checkpoint_final.pt \
+    --checkpoint /kaggle/working/checkpoints_v2/checkpoint_final.pt \
     --agents atar,random,zeroshot,react \
     --model-name Qwen/Qwen2.5-7B-Instruct --device cuda \
     --out-dir /kaggle/working/eval_final
@@ -213,14 +228,14 @@ below resumes safely.
 
 1. **Step-0 checkpoint** (the untrained starting point; no download needed):
    ```python
-   !python scripts/make_untrained_checkpoint.py --hidden-size 3584 --out /kaggle/working/checkpoints/checkpoint_step_0.pt
+   !python scripts/make_untrained_checkpoint.py --hidden-size 3584 --out /kaggle/working/checkpoints_v2/checkpoint_step_0.pt
    ```
 2. **Evaluate the versions you want on the curve** — e.g. step 0, every
    ~6k steps, and the final one — each into its own folder (≈ 45 min each
    for 200 tasks; `--max-tasks 50` ≈ 12 min gives a rougher curve):
    ```python
    for step in [0, 6144, 12288, 18432, 24576]:
-       !python scripts/evaluate.py --checkpoint /kaggle/working/checkpoints/checkpoint_step_{step}.pt \
+       !python scripts/evaluate.py --checkpoint /kaggle/working/checkpoints_v2/checkpoint_step_{step}.pt \
            --agents atar --model-name Qwen/Qwen2.5-7B-Instruct --device cuda --out-dir /kaggle/working/eval_step{step}
    ```
 3. **Baselines once** (the same tasks; or reuse section 5's `eval_final`):
@@ -231,7 +246,7 @@ below resumes safely.
 4. **Record replays** (3 tasks per tier × each version + baselines):
    ```python
    # In a notebook, {...} inside a ! command is Python, so build the list first.
-   ckpts = " ".join(f"/kaggle/working/checkpoints/checkpoint_step_{s}.pt" for s in [0, 6144, 12288, 18432, 24576])
+   ckpts = " ".join(f"/kaggle/working/checkpoints_v2/checkpoint_step_{s}.pt" for s in [0, 6144, 12288, 18432, 24576])
    !python scripts/record_replays.py --checkpoints {ckpts} \
        --baselines react,zeroshot,random --tasks-per-tier 3 \
        --model-name Qwen/Qwen2.5-7B-Instruct --device cuda --out /kaggle/working/replays.jsonl
