@@ -58,7 +58,7 @@ def test_bad_queries_are_rejected_without_a_request(params: object) -> None:
 def test_overlong_query_rejected_without_a_request() -> None:
     seen: list = []
     r = wikipedia_search({"query": "x" * (MAX_QUERY_CHARS + 1)}, opener=_opener(b"{}", seen=seen))
-    assert not r.success and "longer" in r.error and seen == []
+    assert not r.success and "longer" in (r.error or "") and seen == []
 
 
 @pytest.mark.parametrize("query", [
@@ -77,19 +77,19 @@ def test_query_cannot_change_host_path_or_parameters(query: str) -> None:
 
 def test_http_error_status_fails_closed() -> None:
     r = wikipedia_search({"query": "x"}, opener=_opener(b"", status=503))
-    assert not r.success and "503" in r.error
+    assert not r.success and "503" in (r.error or "")
 
 
 def test_network_exception_fails_closed() -> None:
     def boom(request, timeout):  # noqa: ANN001
         raise TimeoutError("slow")
     r = wikipedia_search({"query": "x"}, opener=boom)
-    assert not r.success and "TimeoutError" in r.error
+    assert not r.success and "TimeoutError" in (r.error or "")
 
 
 def test_oversized_response_fails_closed() -> None:
     r = wikipedia_search({"query": "x"}, opener=_opener(b"a" * (MAX_RESPONSE_BYTES + 10)))
-    assert not r.success and "too large" in r.error
+    assert not r.success and "too large" in (r.error or "")
 
 
 @pytest.mark.parametrize("body", [b"not json", b"{}", b'{"query": {"pages": []}}',

@@ -37,7 +37,8 @@ class AtarConfig(BaseSettings):
 
 def load_config() -> AtarConfig:
     try:
-        return AtarConfig()
+        # pydantic-settings fills the required fields from ATAR_* env vars / .env.
+        return AtarConfig()  # pyright: ignore[reportCallIssue]
     except ValidationError as e:
         missing_vars = []
         for error in e.errors():

@@ -12,7 +12,7 @@ from atar.shared.shared_types import (
     Task,
     ToolResult,
 )
-from slice.calculator import execute_calculator, _safe_eval
+from slice.calculator import execute_calculator
 from slice.dummy_policy import DummyPolicy
 from slice.env import SliceEnv
 from slice.state_builder import build_state
@@ -226,6 +226,7 @@ class TestSliceEnv:
     def test_truncation_at_max_turns(self) -> None:
         env = SliceEnv()
         env.reset(task=self._make_task())
+        trunc = False
         for _ in range(5):
             _, _, term, trunc, _ = env.step(ActionType.ANSWER_DIRECTLY)
             if term or trunc:

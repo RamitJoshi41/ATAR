@@ -16,7 +16,8 @@ def test_bundle_views(tmp_path: Path) -> None:
     assert b.atar_versions() == [("step_0", 0), ("step_100", 100)]
     assert b.baseline_versions() == ["react"]
     assert [t.task_id for t in b.tasks()] == ["calc-1"]
-    assert b.episode("step_100", "calc-1").correct is True
+    ep = b.episode("step_100", "calc-1")
+    assert ep is not None and ep.correct is True
     assert b.episode("step_999", "calc-1") is None
     assert [e["step"] for e in b.curve["atar"]] == [0, 100]
 

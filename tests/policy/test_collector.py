@@ -11,7 +11,6 @@ entries."
 
 from __future__ import annotations
 
-import os
 import pytest
 import torch
 import numpy as np
@@ -206,6 +205,7 @@ def test_collector_batch_has_pooled_env_ids_and_bootstrap(
     assert batch.pooled is not None
     assert batch.pooled.shape == (7, llm.projection.in_features)
     # Round-robin fill: env ids 0,1,2,0,1,2,0
+    assert batch.env_ids is not None
     assert batch.env_ids.tolist() == [0, 1, 2, 0, 1, 2, 0]
     assert batch.bootstrap_values is not None
     assert batch.bootstrap_values.shape == (n_envs,)
@@ -264,7 +264,7 @@ def test_curriculum_reset_exact_filtering(
     
     # Skew the task distribution to make rejection sampling fail
     # 100 Tier 5 tasks, 1 Tier 1 task
-    from atar.shared.shared_types import Task, ActionType
+    from atar.shared.shared_types import Task
     env._tasks = [
         Task(id="t1", tier=1, query="q", required_tools=[], ground_truth="1")
     ] + [

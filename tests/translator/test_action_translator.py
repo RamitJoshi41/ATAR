@@ -482,7 +482,7 @@ class TestAllowListCrossCheck:
         # registry regex pre-filter.  The pre-filter reason would say
         # "Forbidden pattern matched: '...'" — that string does NOT contain
         # "Forbidden import".
-        assert reason.startswith("Forbidden import"), (
+        assert isinstance(reason, str) and reason.startswith("Forbidden import"), (
             f"Expected the AST validator to fire (reason starts with 'Forbidden import'), "
             f"but got: {reason!r}\n"
             "If this says 'Forbidden pattern matched', the regex pre-filter now "

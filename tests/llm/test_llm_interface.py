@@ -10,8 +10,7 @@ import time
 import pytest
 import torch
 
-from atar.llm.llm_interface import LLMInterface, ModelLoadError, GenerationError
-from atar.configs.base_config import AtarConfig
+from atar.llm.llm_interface import LLMInterface, ModelLoadError
 
 # ---------------------------------------------------------------------------
 # Module-scoped fixture — model loaded once for the whole test session.
@@ -375,11 +374,11 @@ def test_encode_batch_no_padding_tighter_tolerance(llm: LLMInterface) -> None:
     assert batch_out.shape == (N, 384)
 
     # Verify the mask is all-ones (no padding) — confirm the premise of the test.
-    prompts = [
-        llm.tokenizer.apply_chat_template(
-            msgs, tokenize=False, add_generation_prompt=True
-        )
-    ] * N
+    prompt = llm.tokenizer.apply_chat_template(
+        msgs, tokenize=False, add_generation_prompt=True
+    )
+    assert isinstance(prompt, str)
+    prompts = [prompt] * N
     inputs = llm.tokenizer(prompts, return_tensors="pt", padding=True)
     assert inputs["attention_mask"].all(), (
         "Expected all-ones attention_mask (no padding) for same-length inputs."

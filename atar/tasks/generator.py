@@ -2,6 +2,7 @@ import json
 import random
 import uuid
 from pathlib import Path
+from typing import Any
 from jinja2 import Template
 
 from atar.shared.shared_types import Task, ActionType
@@ -245,7 +246,7 @@ T5_TEMPLATES = [
 ]
 
 
-def generate_tasks(tier: int, count: int, seed: int, seen_queries: set = None) -> list[Task]:
+def generate_tasks(tier: int, count: int, seed: int, seen_queries: set[str] | None = None) -> list[Task]:
     rng = random.Random(seed)
     tasks = []
     
@@ -286,7 +287,7 @@ def generate_tasks(tier: int, count: int, seed: int, seen_queries: set = None) -
             
         seen_queries.add(query)
         task_id = str(uuid.UUID(int=rng.getrandbits(128), version=4))
-        metadata = {"template_idx": template_idx}
+        metadata: dict[str, Any] = {"template_idx": template_idx}
 
         if tier == 2:
             if callable(t_def["ground_truth"]):

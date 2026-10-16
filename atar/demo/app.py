@@ -148,7 +148,7 @@ def tab_progress(bundle: DemoBundle) -> None:
         return
     tiers = ["all"] + sorted({t for e in curve["atar"] for t in e.get("per_tier", {})})
     c1, c2 = st.columns(2)
-    metric = c1.selectbox("Metric", list(METRIC_LABELS), format_func=METRIC_LABELS.get)
+    metric = c1.selectbox("Metric", list(METRIC_LABELS), format_func=lambda m: METRIC_LABELS[m])
     tier = c2.selectbox("Tasks", tiers, format_func=lambda t: "All tiers" if t == "all" else t.replace("_", " ").title())
 
     st.markdown(f"#### {METRIC_LABELS[metric]} on held-out tasks, by training step")
@@ -248,6 +248,9 @@ def tab_live(bundle: DemoBundle) -> None:
             ckpt = st.text_input("Checkpoint (.pt)", value="")
             device = st.selectbox("Device", ["cuda", "cpu"])
             if st.form_submit_button("Load model and checkpoint"):
+                if not model or not ckpt:
+                    st.error("Enter both a model name and a checkpoint path.")
+                    return
                 try:
                     from atar.demo.live import LiveRunner
                     with st.spinner("Loading the model (this can take minutes)…"):

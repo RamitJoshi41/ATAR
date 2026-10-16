@@ -617,5 +617,5 @@ class PPOTrainer:
             "policy_loss": total_policy_loss / n_updates,
             "value_loss": total_value_loss / n_updates,
             "entropy": total_entropy / n_updates,
-            "lr": self._scheduler.get_last_lr()[0],
+            "lr": float(self._scheduler.get_last_lr()[0]),
         }

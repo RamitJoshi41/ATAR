@@ -80,7 +80,7 @@ def learning_curve_chart(curve: dict[str, Any], metric: str, tier: str) -> alt.L
                                       legend=alt.Legend(title="Baselines", orient="bottom")),
             tooltip=[alt.Tooltip("label:N", title="Baseline"), alt.Tooltip("value:Q", title=label, format=".3f")],
         ))
-    return alt.layer(*layers).properties(height=340)
+    return alt.LayerChart(layer=layers, height=340)
 
 
 def action_mix_chart(curve: dict[str, Any], tier: str) -> alt.Chart | None:

@@ -7,9 +7,8 @@ Kaggle discovering something is subtly wrong. Read the comments — the
 expected values aren't magic, they're derived step by step below.
 """
 import torch
-import pytest
 from atar.policy.ppo_stubs import compute_gae, compute_ppo_loss
-from atar.policy.types import RolloutBatch, PPOLossOutput
+from atar.policy.types import RolloutBatch
 
 import torch.nn as nn
 
@@ -118,7 +117,7 @@ def test_compute_ppo_loss_ratio_one_reduces_to_negative_mean_advantage():
 
     result = compute_ppo_loss(
         rollout_batch=batch,
-        policy=policy,
+        policy=policy,  # type: ignore[arg-type]  # duck-typed stand-in
         clip_range=0.2,
         value_coef=0.5,
         entropy_coef=0.01,

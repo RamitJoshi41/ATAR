@@ -10,7 +10,6 @@ Tests are marked @pytest.mark.xfail(strict=True) so they show as XFAIL
 implements the stubs, these tests can be un-marked and given real assertions.
 """
 
-import pytest
 import torch
 
 from atar.policy.ppo_stubs import compute_ppo_loss, compute_gae

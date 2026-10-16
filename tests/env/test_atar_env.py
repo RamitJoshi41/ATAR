@@ -27,7 +27,6 @@ from __future__ import annotations
 import math
 import os
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pytest
@@ -43,7 +42,6 @@ from atar.shared.shared_types import (
     ActionType,
     RewardComponents,
     Task,
-    ToolResult,
     STATE_DIM,
 )
 
@@ -345,7 +343,6 @@ class TestMaxTurnsTruncation:
     @pytest.mark.slow
     def test_truncation_no_accuracy_bonus(self, env: ATAREnv) -> None:
         """Bonus must be 0.0 after truncation (no correct answer given)."""
-        from atar.env.atar_env import MAX_TURNS
 
         task = _tier1_calculator_task()
         env.reset(task=task)

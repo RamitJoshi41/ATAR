@@ -1,5 +1,3 @@
-import pytest
-from unittest.mock import patch
 from atar.tasks.generator import generate_dataset, generate_tasks, T1_TEMPLATES, T2_TEMPLATES, T3_TEMPLATES, T4_TEMPLATES, T5_TEMPLATES
 from atar.tools import sandbox
 

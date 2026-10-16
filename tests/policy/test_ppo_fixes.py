@@ -181,6 +181,8 @@ def test_rollout_buffer_carries_pooled_and_env_ids_into_minibatches() -> None:
         )
     buf.bootstrap_values = torch.tensor([1.0, 2.0])
     batch = buf.to_batch()
+    assert batch.env_ids is not None and batch.pooled is not None
+    assert batch.bootstrap_values is not None
 
     assert batch.env_ids.tolist() == [0, 1, 0, 1]
     assert batch.pooled[:, 0].tolist() == [0.0, 1.0, 2.0, 3.0]
@@ -188,4 +190,5 @@ def test_rollout_buffer_carries_pooled_and_env_ids_into_minibatches() -> None:
 
     for mb in buf.minibatches(batch, minibatch_size=2, shuffle=True):
         # pooled row k was filled with value k, and env_id = k % 2
+        assert mb.pooled is not None and mb.env_ids is not None
         assert (mb.pooled[:, 0].long() % 2).tolist() == mb.env_ids.tolist()

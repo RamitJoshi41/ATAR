@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import pytest
 import torch
-from pathlib import Path
 
 from atar.llm.llm_interface import LLMInterface
 from atar.env.atar_env import ATAREnv

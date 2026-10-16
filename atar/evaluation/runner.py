@@ -531,8 +531,9 @@ class EvalRunner:
             final_answer = step_info.get("final_answer", final_answer)
 
             # If ReAct agent, feed back observation
-            if hasattr(agent, "observe"):
-                agent.observe(action_int, step_info)
+            observe = getattr(agent, "observe", None)
+            if observe is not None:
+                observe(action_int, step_info)
 
             state = next_state
 

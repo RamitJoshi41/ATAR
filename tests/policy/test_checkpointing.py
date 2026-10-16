@@ -20,6 +20,7 @@ import json
 import pytest
 import torch
 from pathlib import Path
+from typing import Any
 
 from atar.llm.llm_interface import LLMInterface
 from atar.policy.policy_network import ATARPolicy
@@ -360,7 +361,7 @@ def test_extension_continues_finished_run_with_all_tiers_and_fresh_lr(
     planned run's checkpoint_final.pt is not overwritten.
     """
     ckpt_dir = tmp_path / "ckpts_ext"
-    common = dict(
+    common: dict[str, Any] = dict(
         llm=llm, data_dir=str(data_dir), n_envs=2, rollout_steps=5,
         total_steps=10, batch_size=5, epochs_per_update=1,
         checkpoint_dir=str(ckpt_dir), checkpoint_interval=1, wandb_mode="offline",
@@ -388,7 +389,7 @@ def test_extension_resume_mid_way_keeps_its_schedule(
 ) -> None:
     """Repeating the same --extend-to command in a new session must not restart the LR."""
     ckpt_dir = tmp_path / "ckpts_ext_mid"
-    common = dict(
+    common: dict[str, Any] = dict(
         llm=llm, data_dir=str(data_dir), n_envs=2, rollout_steps=5,
         total_steps=10, batch_size=5, epochs_per_update=1,
         checkpoint_dir=str(ckpt_dir), checkpoint_interval=1, wandb_mode="offline",
@@ -492,7 +493,7 @@ def test_wandb_init_failure_falls_back_to_disabled(
 
     real_init = wandb.init
 
-    def flaky_init(*args: object, **kwargs: object):  # noqa: ANN202
+    def flaky_init(*args: Any, **kwargs: Any) -> Any:
         if kwargs.get("mode") != "disabled":
             raise RuntimeError("could not reach W&B")
         return real_init(*args, **kwargs)

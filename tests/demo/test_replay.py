@@ -28,10 +28,10 @@ def test_calculator_then_answer_is_recorded_step_by_step(stub_env: ATAREnv) -> N
     assert rec.action_trace == ["CALCULATOR", "ANSWER_DIRECTLY"]
     s1, s2 = rec.steps
     assert s1.params == {"expression": "2 + 2"}
-    assert s1.tool_success is True and s1.tool_output.startswith("4")
+    assert s1.tool_success is True and s1.tool_output is not None and s1.tool_output.startswith("4")
     assert s1.reward["efficiency"] == pytest.approx(-0.5)
     assert s1.cumulative_reward == pytest.approx(-0.5)
-    assert s1.action_probs[int(ActionType.CALCULATOR)] == 1.0
+    assert s1.action_probs is not None and s1.action_probs[int(ActionType.CALCULATOR)] == 1.0
     assert s1.value_estimate == pytest.approx(1.5)
 
     assert s2.reward["accuracy"] == pytest.approx(10.0)
@@ -110,6 +110,7 @@ def test_real_atar_agent_probabilities_are_recorded(stub_env: ATAREnv) -> None:
     rec = run_episode(stub_env, agent, _task(stub_env, "calc-1"), version="step_0",
                       agent_name="atar", model_name="stub", checkpoint_step=0)
     for step in rec.steps:
+        assert step.action_probs is not None
         assert len(step.action_probs) == 7
         assert all(isinstance(p, float) for p in step.action_probs)
         assert sum(step.action_probs) == pytest.approx(1.0, abs=1e-5)
