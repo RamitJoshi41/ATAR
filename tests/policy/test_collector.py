@@ -237,6 +237,12 @@ def test_collector_stats_returned(
         action_fracs = [v for k, v in stats.items() if k.startswith("action_frac/")]
         assert len(action_fracs) == len(ActionType)
         assert sum(action_fracs) == pytest.approx(1.0)
+        # Per-tier action shares: each tier's 7 fractions sum to 1.
+        tiers = {k.split("/")[1] for k in stats if k.startswith("action_frac_by_tier/")}
+        assert tiers
+        for t in tiers:
+            fracs = [v for k, v in stats.items() if k.startswith(f"action_frac_by_tier/{t}/")]
+            assert len(fracs) == len(ActionType) and sum(fracs) == pytest.approx(1.0)
 
 def test_curriculum_reset_exact_filtering(
     llm: LLMInterface, policy: ATARPolicy, data_dir: str

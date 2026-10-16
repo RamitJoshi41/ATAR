@@ -451,3 +451,58 @@ def test_metrics_jsonl_has_one_record_per_update(
         if r["n_episodes_completed"] > 0:
             assert any(k.startswith("action_frac/") for k in r)
             assert any(k.startswith("invalid_param_rate/") for k in r)
+
+
+def test_wandb_failure_never_costs_training_progress(
+    llm: LLMInterface, data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    A W&B outage (e.g. its background process dying on Kaggle) must not stop
+    training: the update still lands in metrics.jsonl and its checkpoint is
+    still saved, and the run finishes cleanly.
+    """
+    import json
+
+    ckpt_dir = tmp_path / "ckpts_wandb_down"
+    trainer = PPOTrainer(
+        policy=ATARPolicy(), llm=llm, data_dir=str(data_dir), n_envs=2,
+        rollout_steps=8, total_steps=50, batch_size=4, epochs_per_update=1,
+        checkpoint_dir=str(ckpt_dir), checkpoint_interval=1,   # as on Kaggle
+        wandb_mode="offline", stop_after_updates=2,
+    )
+
+    def boom(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("wandb backend process has shut down")
+
+    monkeypatch.setattr(trainer._run, "log", boom)
+    monkeypatch.setattr(trainer._run, "finish", boom)
+    trainer.train()
+
+    assert trainer._global_step == 16
+    assert (ckpt_dir / "checkpoint_step_8.pt").exists()
+    assert (ckpt_dir / "checkpoint_step_16.pt").exists()
+    lines = (ckpt_dir / "metrics.jsonl").read_text().splitlines()
+    assert [json.loads(line)["global_step"] for line in lines] == [8, 16]
+
+
+def test_wandb_init_failure_falls_back_to_disabled(
+    llm: LLMInterface, data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import wandb
+
+    real_init = wandb.init
+
+    def flaky_init(*args: object, **kwargs: object):  # noqa: ANN202
+        if kwargs.get("mode") != "disabled":
+            raise RuntimeError("could not reach W&B")
+        return real_init(*args, **kwargs)
+
+    monkeypatch.setattr(wandb, "init", flaky_init)
+    trainer = PPOTrainer(
+        policy=ATARPolicy(), llm=llm, data_dir=str(data_dir), n_envs=2,
+        rollout_steps=8, total_steps=50, batch_size=4, epochs_per_update=1,
+        checkpoint_dir=str(tmp_path / "ck"), wandb_mode="online", stop_after_updates=1,
+    )
+    trainer.train()
+    assert trainer._global_step == 8
+    assert (tmp_path / "ck" / "checkpoint_step_8.pt").exists()

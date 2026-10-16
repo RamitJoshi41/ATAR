@@ -303,3 +303,27 @@ Template per entry:
 - Watch in session 2: tier-3/4 success as Phase 2 adds multi-tool tasks; if
   flat while entropy keeps falling, raise the entropy coefficient.
 - Next: session 2 from checkpoint_step_8192.pt with --stop-after-updates 7.
+
+## 2026-10-16 — Real run, session 2 reviewed (metrics.jsonl, steps 9,216–15,360)
+- Phase 2 (tiers 1–4) from step 9,216. Training-set success fell from 0.84
+  to 0.59–0.68 as harder tiers arrived (expected), but over 7 updates tier 3
+  stayed flat at 0.54–0.64 and tier 4 at 0.21–0.30, while entropy fell
+  0.81 → 0.35. Tiers 1–2 held (0.81–0.92 / 0.67–0.82). value_loss 28 → 11.
+- Found: from step 10,240 the policy CLARIFIES about once per episode on
+  every tier (39–51% of all actions; 1.28 per episode by step 15,360). From
+  step_reward/CLARIFY, only 52–80 CLARIFYs per rollout earned the +1 (first
+  CLARIFY on a tier-4 task, ~90 tier-4 episodes per rollout); 340–465 were
+  unneeded or repeated (−0.5 each). Reading: a cheap hedge — always ask,
+  since asking costs only 0.5 and an unanswered ambiguous task costs ~15 —
+  yet tier-4 success stayed ~0.27, so the hedge isn't even solving tier 4.
+  CALCULATOR's invalid-param rate rose to 50–78% (few calls).
+- Also from session 2: W&B showed the run "Crashed" while training continued.
+  Made every W&B call best-effort (metrics.jsonl first, then W&B; init
+  failure → W&B disabled) so a W&B outage can never cost an update; +2 tests.
+  Added `action_frac_by_tier/tier_k/<ACTION>` charts.
+- Tests (venv, one file at a time — the all-at-once run was OOM-killed on the
+  15 GB laptop): tests/policy 66 passed.
+- Next: before more training, record ~20 real episodes of
+  checkpoint_step_15360 (record_replays.py, 4 per tier) to see params,
+  rejections and answers per tier; then decide the CLARIFY reward /
+  exploration change. Phase 3 (tier 5) begins at the 2nd update of session 3.

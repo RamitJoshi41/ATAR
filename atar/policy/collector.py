@@ -130,6 +130,9 @@ class VectorizedCollector:
         self._action_counts: np.ndarray = np.zeros(len(ActionType), dtype=np.int64)
         self._action_reward_sum: np.ndarray = np.zeros(len(ActionType), dtype=np.float64)
         self._action_invalid: np.ndarray = np.zeros(len(ActionType), dtype=np.int64)
+        # (tier, action) step counts: shows whether e.g. CLARIFY is used on the
+        # ambiguous tier-4 tasks or everywhere.
+        self._tier_action_counts: dict[int, np.ndarray] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -185,6 +188,7 @@ class VectorizedCollector:
         self._action_counts[:] = 0
         self._action_reward_sum[:] = 0.0
         self._action_invalid[:] = 0
+        self._tier_action_counts = {}
         total_steps_collected = 0
 
         while total_steps_collected < steps:
@@ -236,6 +240,10 @@ class VectorizedCollector:
                 self._action_reward_sum[action_int] += reward_float
                 if not info.get("params_valid", True):
                     self._action_invalid[action_int] += 1
+                tier = int(info.get("task_tier", -1))
+                self._tier_action_counts.setdefault(
+                    tier, np.zeros(len(ActionType), dtype=np.int64)
+                )[action_int] += 1
 
                 # Per-episode tracking
                 self._episode_rewards[i] += reward_float
@@ -345,5 +353,11 @@ class VectorizedCollector:
                 )
                 stats[f"invalid_param_rate/{action.name}"] = float(
                     self._action_invalid[action.value] / n
+                )
+        for tier, counts in sorted(self._tier_action_counts.items()):
+            n_tier = max(int(counts.sum()), 1)
+            for action in ActionType:
+                stats[f"action_frac_by_tier/tier_{tier}/{action.name}"] = float(
+                    counts[action.value] / n_tier
                 )
         return stats

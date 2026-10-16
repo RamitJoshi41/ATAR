@@ -223,13 +223,22 @@ class PPOTrainer:
             "no_curriculum": no_curriculum,
             "freeze_projection": freeze_projection,
         }
-        self._run = wandb.init(
-            project=wandb_project,
-            config=hparams,
-            mode=wandb_mode,
-            id=wandb_run_id,
-            resume="allow",
-        )
+        self._wandb_failed = False
+        try:
+            self._run = wandb.init(
+                project=wandb_project,
+                config=hparams,
+                mode=wandb_mode,
+                id=wandb_run_id,
+                resume="allow",
+            )
+        except Exception as exc:  # noqa: BLE001 — train without W&B rather than not at all
+            logger.warning(
+                "W&B init failed (%s: %s); training with W&B disabled. Metrics still "
+                "go to %s.", type(exc).__name__, exc, self._checkpoint_dir / "metrics.jsonl",
+            )
+            self._wandb_failed = True
+            self._run = wandb.init(mode="disabled")
 
     # ------------------------------------------------------------------
     # Training entry point
@@ -288,11 +297,12 @@ class PPOTrainer:
                 **collection_stats,
                 **update_stats,
             }
-            self._run.log(log_dict, step=self._global_step)
             # Plain-file copy of every update's metrics, next to the
             # checkpoints, so the full history survives without W&B access.
+            # Written BEFORE the W&B call, which is best-effort (see _wandb).
             with open(self._checkpoint_dir / "metrics.jsonl", "a") as fh:
                 fh.write(json.dumps(log_dict) + "\n")
+            self._wandb(lambda: self._run.log(log_dict, step=self._global_step))
 
             # ── Periodic checkpointing ─────────────────────────────────────
             self._update_count += 1
@@ -311,8 +321,7 @@ class PPOTrainer:
                 if self._update_count % self._checkpoint_interval != 0:
                     # Save a checkpoint with the same naming as normal interval checkpoints
                     self.save_checkpoint(tag=f"step_{self._global_step}")
-                self._run.summary["final_step"] = self._global_step
-                self._run.finish()
+                self._finish_wandb()
                 return
 
         # Final checkpoint ("final" for the planned run; an extension keeps
@@ -321,8 +330,30 @@ class PPOTrainer:
             tag="final" if stop_at == self._total_steps else f"final_{stop_at}"
         )
         logger.info("Training complete at step %d.", self._global_step)
-        self._run.summary["final_step"] = self._global_step
-        self._run.finish()
+        self._finish_wandb()
+
+    # ------------------------------------------------------------------
+    # W&B: best effort — a W&B outage must never cost training progress
+    # ------------------------------------------------------------------
+
+    def _wandb(self, call: Any) -> None:
+        """Run a W&B call; on failure warn once and keep training."""
+        try:
+            call()
+        except Exception as exc:  # noqa: BLE001 — any W&B failure is non-fatal
+            if not self._wandb_failed:
+                logger.warning(
+                    "W&B call failed (%s: %s). Training continues; every update is "
+                    "still written to %s.", type(exc).__name__, exc,
+                    self._checkpoint_dir / "metrics.jsonl",
+                )
+            self._wandb_failed = True
+
+    def _finish_wandb(self) -> None:
+        def finish() -> None:
+            self._run.summary["final_step"] = self._global_step
+            self._run.finish()
+        self._wandb(finish)
 
     # ------------------------------------------------------------------
     # Extension beyond the planned run
