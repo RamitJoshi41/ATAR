@@ -367,3 +367,33 @@ Template per entry:
   rollout_buffer/action_mask passed; tests/evaluation 55; tests/demo 66;
   tests/llm 14; tests/translator 128; atar/tests 66. 0 failures.
 - Next: run 2, session 1 — KAGGLE.md 3a (fresh, `--stop-after-updates 8`).
+
+## 2026-10-22 — Run 2, session 1 reviewed (metrics.jsonl, steps 1,024–8,192)
+- 8 updates, all Phase 1 (tiers 1–2); Phase 2 starts with the first update
+  of session 2 (step 9,216). Training metrics (sampled actions on training
+  tasks, not a held-out result):
+  success 0.46 → 0.53 → 0.63 → 0.62 → 0.65 → 0.64 → 0.71 → 0.72;
+  entropy 1.86 → 1.21 (slow, no collapse); value_loss 65 → 26;
+  mean episode length 3.13 → 1.54 (no stalling under ADR-22);
+  CLARIFY 12% → 3.8% of actions at −0.5 each (no ambiguous tasks in
+  Phase 1, so falling is correct). Run 1 at the same step: success 0.84,
+  entropy 0.83 — run 2 is exploring more, so sampled success is lower.
+- Actions: ANSWER_DIRECTLY 30% (+8.4/step) and TERMINATE 34% (+6.1) are the
+  "answer" actions; SQL_QUERY rose to 17% (20% on tier 1). CALCULATOR
+  invalid 26–36%, PYTHON_EXEC 10–20%.
+- param_error_examples: CALCULATOR rejections are the policy picking it for
+  non-arithmetic (city names, SQL, `search(...)`) — a policy choice, not a
+  bug. PYTHON_EXEC: disallowed imports (requests, time, sqlite3, made-up
+  `chemicals`) and code cut off at `{"` (the 7B writes an unescaped `"`
+  inside the JSON string, which closes it). TERMINATE: empty final_answer
+  when the LLM thinks data is missing.
+- Bug found: the registry's SQL pattern `;\s*\S` runs on
+  `json.dumps(params)`, so a single query ending in `;` (`…';"}`) is
+  rejected as "multiple statements". M4's own SQL check on the raw query is
+  correct. Impact so far small (SQL invalid rate 0–6%).
+- Fixed the same day (ADR-25): pattern removed from the registry; M4's
+  raw-query check and SQLite still reject multi-statement SQL. +4 tests;
+  tests/translator 132 passed (3 of them fail against the old registry).
+  No setup-version bump (reward unchanged), so session 2 resumes as planned.
+- Next: session 2 (KAGGLE.md 3b, `--stop-after-updates 7`); watch
+  CLARIFY by tier, tier-3/4 success, mean episode length.

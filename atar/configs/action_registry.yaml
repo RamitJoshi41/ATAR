@@ -137,7 +137,9 @@ actions:
       - '(?i)\b(DROP|DELETE|INSERT|UPDATE|ATTACH|PRAGMA|CREATE|ALTER|GRANT|REVOKE)\b'
       - '--'        # SQL line comment
       - '/\*'      # SQL block comment
-      - ';\s*\S'   # multiple statements
+      # No ';\s*\S' here: these patterns run on json.dumps(params), where a
+      # single query's trailing ';' is followed by '"}' and was rejected.
+      # M4's _validate_sql_query applies that check to the raw query.
 
   # ---- 4: PYTHON_EXEC ------------------------------------------------------
   4:

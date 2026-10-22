@@ -581,3 +581,30 @@ replays/evaluation (loading for inference is not blocked), but not for
 resuming. Training logs also gain up to 3 rejected-parameter examples per
 action per rollout in `metrics.jsonl` (`param_error_examples`) to diagnose
 the 50–78% CALCULATOR rejection rate seen in session 2.
+
+## ADR-25: The single-statement SQL check runs on the raw query only
+**Date:** 2026-10-22
+**Decision:** Remove `';\s*\S'` from SQL_QUERY's `forbidden_patterns` in
+`atar/configs/action_registry.yaml`. M4's `_validate_sql_query` keeps the
+same regex (`_SQL_MULTI_STMT_RE`) on the raw query string, and M1's SQLite
+`execute()` refuses more than one statement on its own.
+**Context:** Run 2, session 1's `param_error_examples` showed single
+queries ending in `;` (`SELECT * FROM articles WHERE title LIKE '%Linux%';`)
+rejected as "multiple statements". Registry patterns are matched against
+`json.dumps(params)`, where a trailing `;` is followed by `"}` — a
+non-whitespace character. M4's raw-query check accepts these correctly.
+**Alternatives considered:**
+- Match registry patterns against each string value instead of the
+  serialised dict — rejected for now: it changes how every action's
+  patterns behave in the middle of a run, for a bug only this pattern has.
+- Change the pattern to exclude `"` after `;` — rejected: a pattern written
+  against JSON escaping is fragile, and the raw-query check already exists.
+**Consequence:** multi-statement SQL is still rejected (M4 raw-query check,
+then SQLite), now with the "single statement" message instead of
+"Forbidden pattern matched". New tests: two plain SELECTs rejected (no
+forbidden keyword, so only the single-statement check can stop them), a
+newline-separated pair rejected, a trailing `;` (with or without whitespace)
+accepted. The reward rules are unchanged, so run 2 resumes under the same
+`TRAINING_SETUP_VERSION`; from session 2 on, the few SQL calls ending in
+`;` (0–6% of SQL calls in session 1) execute instead of costing the
+invalid-parameter penalty.

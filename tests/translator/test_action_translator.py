@@ -182,6 +182,32 @@ class TestValidateRejections:
         )
         assert ok is False
 
+    def test_sql_multi_statement_select_only(self) -> None:
+        """Two SELECTs have no forbidden keyword, so only the single-statement check stops them."""
+        ok, reason = validate(ActionType.SQL_QUERY, {"query": "SELECT 1; SELECT 2"})
+        assert ok is False
+        assert "single statement" in reason
+
+    def test_sql_multi_statement_after_newline(self) -> None:
+        ok, reason = validate(
+            ActionType.SQL_QUERY,
+            {"query": "SELECT * FROM employees;\nSELECT * FROM projects"},
+        )
+        assert ok is False
+
+    def test_sql_trailing_semicolon_allowed(self) -> None:
+        """A single query ending in ';' is valid (run 2 rejected these via the JSON-serialised params)."""
+        ok, params = validate(
+            ActionType.SQL_QUERY,
+            {"query": "SELECT * FROM articles WHERE title LIKE '%Linux%';"},
+        )
+        assert ok is True
+        assert isinstance(params, dict)
+
+    def test_sql_trailing_semicolon_and_whitespace_allowed(self) -> None:
+        ok, _ = validate(ActionType.SQL_QUERY, {"query": "SELECT name FROM employees ;  \n"})
+        assert ok is True
+
     def test_sql_non_select(self) -> None:
         ok, reason = validate(ActionType.SQL_QUERY, {"query": "PRAGMA table_info(employees)"})
         assert ok is False

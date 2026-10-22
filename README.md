@@ -456,6 +456,23 @@ TIMELINE 2026-10-16 for per-file counts; 0 failures.
 
 ---
 
+## 2026-10-22 fix (run 2, session 1 review)
+
+Run 2's first session (steps 1,024–8,192) trained healthily: success
+0.46 → 0.72, entropy 1.86 → 1.21, mean episode length 3.1 → 1.5, CLARIFY
+down to 3.8% (TIMELINE 2026-10-22). Its `param_error_examples` exposed one
+M4 bug: single SQL queries ending in `;` were rejected as "multiple
+statements", because the registry's `;\s*\S` pattern is matched against the
+JSON-serialised params (`…';"}`). The pattern was removed from the registry;
+M4's own check on the raw query (and SQLite) still rejects real
+multi-statement SQL (ADR-25). Reward rules unchanged, so run 2 continues.
+
+**What actually happened when run (venv, CPU):** `tests/translator` 132
+passed (4 new); against the old registry the new tests fail (3 failed), so
+they catch the bug.
+
+---
+
 ## M8: Streamlit Demo (`atar/demo/`)
 
 **What:** `streamlit run atar/demo/app.py` (from the repo root, so `.streamlit/config.toml` is
