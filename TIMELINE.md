@@ -397,3 +397,24 @@ Template per entry:
   No setup-version bump (reward unchanged), so session 2 resumes as planned.
 - Next: session 2 (KAGGLE.md 3b, `--stop-after-updates 7`); watch
   CLARIFY by tier, tier-3/4 success, mean episode length.
+
+## 2026-10-22 — Five code weak spots found; run 2 continues unchanged
+- Run 2 (fresh, setup 2026-10-16) is in session 2: checkpoint_step_10240 saved
+  (Phase 2 since the update after step 7,372).
+- While writing a code walkthrough, I found and confirmed these by running the code (no code changed):
+  W1 `_is_redundant_call` ignores params (a needed second SQL query scores
+  −1.5 instead of −0.5); W2 the Python validator lets dunder-attribute /
+  `getattr` escapes through and execution has no real isolation; W3 search
+  noise uses global `random`, so episodes aren't reproducible from the env
+  seed; W4 `token_cost` is always 0, so the per-token penalty never fires;
+  W5 the grader's long-text fragment rule accepts "France" / "capital" /
+  "Europe" for the tier-4 "the capital" tasks (44 train, 10 test).
+- Decision: do NOT restart run 2. W1 and W5 change the reward, but their
+  effect is small and bounded. W1 hits one template, which the policy already
+  avoids with a JOIN. W5 needs the 7B to write a bare fragment. A restart
+  would discard 10 updates (~13 GPU-h). Any push touching the reward, grader
+  or data would silently change run 2 mid-way (each Kaggle session clones the
+  repo), so these are deferred until run 2 finishes.
+- Next: after run 2, fix W5 in the grader and test set BEFORE the held-out
+  evaluation, so all agents are graded strictly (document that training used
+  the lenient rule). Fix W1–W4 for any later run (setup version bump).
