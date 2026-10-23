@@ -418,3 +418,33 @@ Template per entry:
 - Next: after run 2, fix W5 in the grader and test set BEFORE the held-out
   evaluation, so all agents are graded strictly (document that training used
   the lenient rule). Fix W1–W4 for any later run (setup version bump).
+
+## 2026-10-23 — Run 2, session 2 reviewed (metrics.jsonl, steps 9,216–15,360)
+- 7 updates, Phase 2 (tiers 1–4) throughout. Resumed from a Kaggle dataset
+  upload (`atar-run2-session1`) because the attached notebook output was not
+  visible under /kaggle/input. No "Forbidden pattern ;" SQL rejections
+  appear, so session 2 ran with the ADR-25 fix.
+- Training metrics (sampled, training tasks):
+  success 0.65 → 0.58 → 0.65 → 0.66 → 0.66 → 0.69 → 0.69;
+  tier 1 0.87 → 0.90, tier 2 0.68 → 0.74, tier 3 0.69–0.83 (run 1: flat
+  0.54–0.64 with the bad ground truths), tier 4 0.17 → 0.26 (0.14–0.29,
+  noisy; run 1: 0.21–0.30); entropy 1.19 → 0.91 (run 1 at 15,360: 0.35);
+  value_loss 38 → 22; mean episode length 1.55–1.71 (no stalling).
+- CLARIFY is where it should be: 1.6–4.7% of actions on tiers 1–3, rising
+  on tier 4 from 1.8% to 16.5% of its actions. Mean CLARIFY step reward
+  went from −0.24 to +0.55. From that mean, the CLARIFYs earning +1 (first
+  CLARIFY on a tier-4 task) rose from ~4 to ~37 per rollout, out of ~140
+  tier-4 episodes. Run 1 at the same point: CLARIFY on every tier as a hedge.
+- Tier 4 is still the weak tier: most tier-4 episodes still answer without
+  asking (TERMINATE param errors show the LLM saying "requires
+  clarification on which employee" after the policy chose TERMINATE).
+  Note: W5 (grader accepts "France" for "the capital") inflates tier-4
+  success slightly.
+- New param errors are LLM behaviour, not bugs: tier-3 "(SELECT salary …) /
+  50" rejected (not a valid SQLite statement either), `len('Paris')` sent to
+  CALCULATOR (function calls not allowed by design).
+- Decision: no code change (nothing that touches the reward may be pushed
+  until run 2 ends). Session 3 runs as planned; Phase 3 (tier 5) begins at
+  step 18,432. Tier-4 trend feeds the 3c extend decision after 24,576.
+- Next: session 3 (7 updates → 22,528), then session 4 (2 updates →
+  24,576 + checkpoint_final.pt).
