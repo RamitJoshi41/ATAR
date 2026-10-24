@@ -448,3 +448,28 @@ Template per entry:
   step 18,432. Tier-4 trend feeds the 3c extend decision after 24,576.
 - Next: session 3 (7 updates → 22,528), then session 4 (2 updates →
   24,576 + checkpoint_final.pt).
+
+## 2026-10-24 — Run 2, session 3 reviewed (metrics.jsonl, steps 16,384–22,528)
+- 7 updates; Phase 3 (all 5 tiers) from the rollout logged at 18,432, as
+  planned. Run as a Kaggle "Save & Run All" background session, resumed from
+  dataset `atar-run2-session2`.
+- Training metrics (sampled, training tasks):
+  success 0.68 → 0.71 → 0.73 → 0.75 → 0.79 → 0.77 → 0.80;
+  tier 4 0.31 → 0.34 → 0.52 → 0.48 → 0.57 → 0.57 → 0.62 (session 2 ended at
+  0.26); tier 5 (new) 0.62 → 0.73 → 0.75 → 0.83 → 0.71; tiers 1–3 held
+  (0.84–0.94 / 0.68–0.81 / 0.81–0.86) as tier 5 arrived.
+- CLARIFY: 25% → 33% of tier-4 actions; 1–5% on tiers 1–3; on tier 5 11%
+  in its first rollout, then 1–5%. From the CLARIFY mean step reward
+  (+0.79), ~86 first-CLARIFYs on tier-4 tasks per rollout out of ~122
+  tier-4 episodes (~70%, vs ~26% at the end of session 2).
+- entropy 0.90 → 0.63 (gradual); value_loss ~20; mean episode length
+  1.59–1.78; lr 8.2e-5 → 1.5e-5 (cosine tail).
+- Caveat: W5 (grader fragment rule accepts "France"/"Europe"/"capital" for
+  29% of tier-4 training tasks) inflates tier-4 training success by an
+  unknown amount; the rise tracks CLARIFY use, so most of it is real.
+- Checked: training reads only tasks_train.jsonl, and with ground truth
+  "Paris" the grader rejects "France"/"Europe"/"capital" and accepts
+  "Paris" / "The capital of France is Paris." — so W5 can be removed from
+  the held-out test set without touching training.
+- Next: session 4 (2 updates → 24,576 + checkpoint_final.pt), then held-out
+  evaluation and the 3c extend decision.
