@@ -478,3 +478,27 @@ Template per entry:
   unchanged (byte-identical). Found and fixed: the generator test rewrote
   data/ on every run (now tmp_path; +test that the generator reproduces the
   committed files). atar/tests/tasks 6 passed, tests/evaluation 63 passed.
+
+## 2026-10-24 — Run 2, session 4 + first held-out evaluations
+- Training finished: 24 updates, step 24,576. Last updates (training
+  metrics): success 0.80 → 0.78 → 0.79, tier 4 0.62 → 0.61 → 0.61, tier 5
+  0.71 → 0.84 → 0.74; entropy 0.60; lr at its 1e-5 floor. Training success
+  has been flat at ~0.77–0.80 since step 20,480.
+- Bug: with `--stop-after-updates` ending exactly on the last planned
+  update, `PPOTrainer.train` returns before `save_checkpoint(tag="final")`,
+  so there is no `checkpoint_final.pt` (`checkpoint_step_24576.pt` holds the
+  same state). The session's "final" evaluation pointed at the missing file;
+  6144/12288/18432 ran.
+- Held-out (200 tasks, W5-fixed test set, 95% bootstrap CI):
+  | step | overall | T1 | T2 | T3 | T4 | T5 | tool calls |
+  |---|---|---|---|---|---|---|---|
+  | 6,144 | 0.595 [0.525, 0.665] | 0.74 | 0.55 | 0.84 | 0.14 | 0.56 | 0.49 |
+  | 12,288 | 0.660 [0.595, 0.725] | 0.90 | 0.61 | 0.88 | 0.27 | 0.40 | 0.73 |
+  | 18,432 | 0.755 [0.695, 0.815] | 0.90 | 0.66 | 0.86 | 0.57 | 0.68 | 0.62 |
+  Tier n = 50/38/50/37/25. Tier 4 rose 0.14 → 0.57 on the strict test set,
+  so the clarification gain is real, not W5. Tier 3 was already 0.84 at
+  6,144 (before any tier-3 training). Tier 2 (distractors, meant to be
+  answered without tools) is the weakest after tier 4, and its tool calls
+  doubled (0.21 → 0.42).
+- Next: evaluate checkpoint_step_24576.pt (+ baselines, step 0) and make
+  the 3c extend decision from 18,432 → 24,576.
