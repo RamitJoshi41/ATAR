@@ -473,6 +473,23 @@ they catch the bug.
 
 ---
 
+## 2026-10-24 fix: held-out "the capital" tasks (W5, ADR-26)
+
+The grader's fragment rule accepted "France", "Europe" or "capital" for the
+tier-4 "the capital" tasks, whose ground truth was a whole search sentence.
+Before run 2's held-out evaluation, the generator now gives the **test**
+split's 10 such tasks the ground truth "Paris" (training split unchanged, so
+run 2's reward is unchanged). Also fixed: the generator's own test wrote to
+`data/` and overwrote the committed files on every run; it now uses a temp
+folder, and a new test checks that the generator reproduces both committed
+files byte for byte.
+
+**What actually happened when run (venv):** `atar/tests/tasks` 6 passed
+(2 new), `tests/evaluation` 63 passed (8 new); `tasks_train.jsonl`
+byte-identical to before, `tasks_test.jsonl` differs in exactly 10 rows.
+
+---
+
 ## M8: Streamlit Demo (`atar/demo/`)
 
 **What:** `streamlit run atar/demo/app.py` (from the repo root, so `.streamlit/config.toml` is

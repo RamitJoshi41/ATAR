@@ -9,9 +9,10 @@ def test_tier_templates():
     assert len(T4_TEMPLATES) >= 3
     assert len(T5_TEMPLATES) >= 3
 
-def test_generate_dataset_counts_and_overlap():
+def test_generate_dataset_counts_and_overlap(tmp_path):
     # DoD: Exactly 800 train / 200 test tasks with correct proportions
-    dataset = generate_dataset()
+    # (tmp_path: writing to data/ would overwrite the committed files)
+    dataset = generate_dataset(out_dir=tmp_path)
     train_tasks = dataset["train"]
     test_tasks = dataset["test"]
     
@@ -115,3 +116,27 @@ def test_capital_length_tasks_expect_the_length_of_the_capital_name():
         rows = [json.loads(line) for line in (data_dir / name).read_text().splitlines()]
         committed = {r["ground_truth"] for r in rows if "prints its length" in r["query"]}
         assert committed == {"5"}, f"{name} still has stale ground truths: {committed}"
+
+
+def test_generate_dataset_reproduces_committed_files(tmp_path):
+    # The committed data must be exactly what the generator produces: run 2
+    # trains on data/tasks_train.jsonl, and hand edits would be silently lost
+    # the next time someone regenerates.
+    from pathlib import Path
+
+    generate_dataset(out_dir=tmp_path)
+    data_dir = Path(__file__).resolve().parents[3] / "data"
+    for name in ("tasks_train.jsonl", "tasks_test.jsonl"):
+        assert (tmp_path / name).read_bytes() == (data_dir / name).read_bytes(), name
+
+
+def test_capital_tasks_expect_paris_in_test_split_only(tmp_path):
+    # ADR-26: the held-out split grades "the capital" tasks against "Paris";
+    # the training split keeps the old sentence until run 2 has finished.
+    dataset = generate_dataset(out_dir=tmp_path)
+    capital = lambda tasks: {
+        t.ground_truth for t in tasks
+        if t.tier == 4 and t.metadata.get("clarification_answer") == "France"
+    }
+    assert capital(dataset["test"]) == {"Paris"}
+    assert capital(dataset["train"]) == {"The capital of France is Paris, located in Europe."}

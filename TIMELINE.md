@@ -473,3 +473,8 @@ Template per entry:
   the held-out test set without touching training.
 - Next: session 4 (2 updates → 24,576 + checkpoint_final.pt), then held-out
   evaluation and the 3c extend decision.
+- Same day: W5 fixed for the held-out set (ADR-26). Generator sets the 10
+  tier-4 "the capital" test tasks to ground truth "Paris"; training split
+  unchanged (byte-identical). Found and fixed: the generator test rewrote
+  data/ on every run (now tmp_path; +test that the generator reproduces the
+  committed files). atar/tests/tasks 6 passed, tests/evaluation 63 passed.

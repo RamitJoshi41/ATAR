@@ -354,7 +354,7 @@ def generate_tasks(tier: int, count: int, seed: int, seen_queries: set[str] | No
     return tasks
 
 
-def generate_dataset(train_count=800, test_count=200, seed=42) -> dict:
+def generate_dataset(train_count=800, test_count=200, seed=42, out_dir: Path | str = "data") -> dict:
     rng = random.Random(seed)
     
     # Train distribution (800)
@@ -384,9 +384,17 @@ def generate_dataset(train_count=800, test_count=200, seed=42) -> dict:
     test_queries = {t.query for t in dataset["test"]}
     if train_queries.intersection(test_queries):
         raise RuntimeError("Overlap found in train and test queries")
-        
+
+    # ADR-26 (W5): the tier-4 "the capital" template's truth is the whole search
+    # sentence, so the grader's fragment rule passes "France", "Europe" or
+    # "capital". Held-out split only: tasks_train.jsonl is run 2's reward and
+    # must not change mid-run. Move this into the template for the next run.
+    for t in dataset["test"]:
+        if t.tier == 4 and t.metadata.get("clarification_answer") == "France":
+            t.ground_truth = "Paris"
+
     # Write to files
-    data_dir = Path("data")
+    data_dir = Path(out_dir)
     data_dir.mkdir(exist_ok=True)
     
     def write_jsonl(path: Path, tasks: list[Task]):

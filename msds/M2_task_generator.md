@@ -7,8 +7,9 @@ difficulty tiers, for both training (800) and held-out evaluation (200).
 ## Public interface (matches shared/interfaces.md section 4)
 ```python
 def generate_tasks(tier: int, count: int, seed: int) -> list[Task]: ...
-def generate_dataset(train_count=800, test_count=200, seed=42) -> dict:
+def generate_dataset(train_count=800, test_count=200, seed=42, out_dir="data") -> dict:
     # returns {"train": list[Task], "test": list[Task]}, no overlap between them
+    # out_dir: added 2026-10-24 (ADR-26) so tests don't overwrite data/
     ...
 ```
 

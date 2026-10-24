@@ -225,3 +225,34 @@ def test_real_test_set_smoke_subset_is_stratified() -> None:
         pytest.skip("Test data not generated yet.")
     picked = stratified_subset(load_tasks_from_jsonl(data_dir / "tasks_test.jsonl"), 20)
     assert sorted({t.tier for t in picked}) == [1, 2, 3, 4, 5]
+
+
+# ─── Tier-4 "the capital" ground truth in the held-out set (W5) ───────────
+
+def _capital_test_tasks() -> list[Task]:
+    data_dir = Path(__file__).parent.parent.parent / "data"
+    if not (data_dir / "tasks_test.jsonl").exists():
+        pytest.skip("Test data not generated yet.")
+    return [
+        t for t in load_tasks_from_jsonl(data_dir / "tasks_test.jsonl")
+        if t.tier == 4 and t.metadata.get("clarification_answer") == "France"
+    ]
+
+
+def test_real_test_set_capital_tasks_expect_paris() -> None:
+    """The long search sentence let "France"/"Europe"/"capital" pass as fragments."""
+    tasks = _capital_test_tasks()
+    assert len(tasks) == 10
+    assert {t.ground_truth for t in tasks} == {"Paris"}
+
+
+@pytest.mark.parametrize("answer", ["France", "Europe", "capital", "The capital is Rome."])
+def test_real_test_set_capital_tasks_reject_non_answers(answer: str) -> None:
+    truth = _capital_test_tasks()[0].ground_truth
+    assert check_answer_correct(answer, truth) is False
+
+
+@pytest.mark.parametrize("answer", ["Paris", "The capital of France is Paris.", "Paris, France"])
+def test_real_test_set_capital_tasks_accept_paris(answer: str) -> None:
+    truth = _capital_test_tasks()[0].ground_truth
+    assert check_answer_correct(answer, truth) is True

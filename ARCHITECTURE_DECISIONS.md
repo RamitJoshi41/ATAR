@@ -608,3 +608,36 @@ accepted. The reward rules are unchanged, so run 2 resumes under the same
 `TRAINING_SETUP_VERSION`; from session 2 on, the few SQL calls ending in
 `;` (0–6% of SQL calls in session 1) execute instead of costing the
 invalid-parameter penalty.
+
+## ADR-26: Grade the held-out "the capital" tasks against "Paris" (W5), test split only
+**Date:** 2026-10-24
+**Decision:** `generate_dataset` sets the ground truth of the 10 tier-4
+"…the capital…" tasks in the **test** split (clarification answer "France")
+to `"Paris"`. The training split keeps "The capital of France is Paris,
+located in Europe." until run 2 has finished. `generate_dataset` also gains
+`out_dir` (default `"data"`), and its test writes to `tmp_path`.
+**Context:** With the long sentence as ground truth, the grader's
+long-text fragment rule accepts any answer whose words all appear in it, so
+"France", "Europe" and "capital" were graded correct (W5) — 44 of 150
+tier-4 training tasks, 10 of 37 tier-4 test tasks. Training reads only
+`tasks_train.jsonl`, so the test split can be fixed before run 2's held-out
+evaluation without changing run 2's reward. While making the fix we found
+that `test_generate_dataset_counts_and_overlap` called `generate_dataset()`
+with no output folder, which rewrote `data/tasks_*.jsonl` on every test run —
+a hand edit of the data files was undone by the next test run.
+**Alternatives considered:**
+- Change the template (both splits) — rejected for now: it changes 44
+  training ground truths, i.e. run 2's reward mid-run (would need a new
+  `TRAINING_SETUP_VERSION` and a restart). Do it for the next run.
+- Change the grader's fragment rule — rejected for now: the grader is the
+  training reward too (ADR-16 keeps train and eval grading identical).
+- Hand-edit `tasks_test.jsonl` only — rejected: the generator would no
+  longer reproduce the committed files, and any regeneration (including
+  the old generator test) silently reverts it.
+**Consequence:** the held-out set is graded more strictly than training on
+these 10 tasks ("France" no longer passes; "Paris" and "The capital of
+France is Paris." do). New tests: the generator reproduces both committed
+files byte for byte; capital tasks expect "Paris" in test and the old
+sentence in train; the real test set rejects "France"/"Europe"/"capital"
+and accepts "Paris". Evaluation fingerprints include the test set's
+SHA-256, so no older result can be resumed into a new evaluation.
