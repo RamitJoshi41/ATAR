@@ -541,8 +541,10 @@ Template per entry:
     5937.5 for 95000 / 4): the LLM divides inside SQL and again in the
     answer. ReAct makes the same error.
   - W7: tier-1 "information about databases" tasks (2 test, 5 train) have
-    the space-exploration sentence as ground truth — the mock search corpus
-    has no databases entry, so the generator recorded whatever BM25 returned.
+    the space-exploration sentence as ground truth. The corpus does have a
+    database sentence, but BM25 has no stemming: the query word "databases"
+    never matches "database", so search returned an unrelated sentence and
+    the generator recorded it as the truth.
 - Decision pending (user): extend run 2 vs stop. Recommendation: stop run 2
   here; re-grade all agents offline with a fixed grader for the report;
   fix W1/W5/W6/W7 before any further training (a run 3 costs about the
