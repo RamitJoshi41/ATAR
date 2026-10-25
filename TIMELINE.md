@@ -564,3 +564,13 @@ Template per entry:
   (0.715); zero-shot 0.430 (0.360); random 0.380 (0.340). All changes tier
   2, none lost. Paired ATAR vs ReAct re-graded: 40 vs 10, p < 0.0001.
 - Tests: test_answer_matching + tests/evaluation 121 passed; full tests/env 78 passed.
+
+## 2026-10-25 — Decision: run 2 stops at step 24,576; demo next
+- User decision: no extension (the 3c rule said extend, but the remaining
+  errors are mostly grader/reward bugs W1/W5/W6 and an LLM arithmetic
+  pattern, which more steps under the same reward would not fix). Final
+  policy = `checkpoint_step_24576.pt`. Any further training = a run 3 with
+  the reward fixed first.
+- Next: one Kaggle session for the step-0 evaluation and the replays
+  (KAGGLE.md 6.1, 6.2 for step 0 only, 6.4), then build `demo_data/`
+  locally from `results/run2/` + the downloaded outputs.
