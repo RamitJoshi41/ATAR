@@ -521,3 +521,29 @@ Template per entry:
   (24,576). By the 3c rule set on 10-24 (≥ 0.80 → extend), held-out is
   still rising. Checked: `start_extension` accepts checkpoint_step_24576.pt
   (step == total_steps), so an extension does not need checkpoint_final.pt.
+- Paired comparison ATAR vs ReAct on the same 200 tasks (from both
+  per_task.jsonl files; per-tier totals match comparison.md): ATAR-only
+  correct 31, ReAct-only 10 → exact McNemar two-sided p = 0.0015; accuracy
+  difference +0.105, paired bootstrap 95% CI [+0.045, +0.165]. By tier
+  (ATAR-only / ReAct-only): T1 4/3, T2 9/0, T3 10/2, T4 7/5, T5 1/0.
+- Failure reading of ATAR 24,576 (36 wrong):
+  - Tier 2, 12 wrong — 11 are grader artifacts (W6): accented names
+    ("Brasília", "Bogotá" vs "Brasilia"/"Bogota") and boiling points whose
+    ground truth is a truncated integer (78.3 vs 78, 356.73 vs 356, 80.1 vs
+    80, 64.7 vs 65, 118.1 vs 118, 61.7 vs 61) with numeric tolerance 0.005.
+    Only "-64.7 °C" for methanol is really wrong. Same grader for every
+    agent and for the training reward.
+  - Tier 4, 12 wrong — 9 are "percentage" tasks: the policy CLARIFYs, then
+    answers without CALCULATOR and the 7B's arithmetic is wrong; ReAct
+    calls CALCULATOR there. 3 are "the capital" tasks answered without
+    asking.
+  - Tier 3, 8 wrong — mostly "divide by N" answered as salary / N² (e.g.
+    5937.5 for 95000 / 4): the LLM divides inside SQL and again in the
+    answer. ReAct makes the same error.
+  - W7: tier-1 "information about databases" tasks (2 test, 5 train) have
+    the space-exploration sentence as ground truth — the mock search corpus
+    has no databases entry, so the generator recorded whatever BM25 returned.
+- Decision pending (user): extend run 2 vs stop. Recommendation: stop run 2
+  here; re-grade all agents offline with a fixed grader for the report;
+  fix W1/W5/W6/W7 before any further training (a run 3 costs about the
+  same GPU time as the 24k-step extension).
