@@ -574,3 +574,11 @@ Template per entry:
 - Next: one Kaggle session for the step-0 evaluation and the replays
   (KAGGLE.md 6.1, 6.2 for step 0 only, 6.4), then build `demo_data/`
   locally from `results/run2/` + the downloaded outputs.
+- Demo shows both graders: `atar/evaluation/regrading.py` (shared by
+  scripts/regrade.py and the demo) adds a "regraded" block per version to
+  curve.json; the Progress tab gets an Original / Re-graded switch (both
+  ATAR and baselines switch; tool calls and latency are grader-independent)
+  and a "Success (re-graded)" table column. Replays keep the original
+  per-episode verdicts. On results/run2 the demo's re-graded numbers equal
+  regrade.md (0.660/0.715/0.820/0.875; ReAct 0.725). Tests: tests/demo +
+  tests/evaluation + test_answer_matching 189 passed; pyright 0 errors.

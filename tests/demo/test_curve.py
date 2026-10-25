@@ -69,3 +69,46 @@ def test_chart_rows(tmp_path: Path) -> None:
     assert curve_rows(curve, "accuracy", "tier_5") == []
     assert baseline_rows(curve, "accuracy") == [{"baseline": "react", "value": 0.5}]
     assert action_mix_rows(curve, "all") == [{"version": "step_0", "step": 0, "action": "CALCULATOR", "fraction": 1.0}]
+
+
+def _write_answers(d: Path, agent: str, rows: list[tuple[int, str, str, str]]) -> None:
+    """rows: (tier, query, ground_truth, final_answer) — one tool call each."""
+    import json
+
+    with open(d / f"per_task_{agent}.jsonl", "w") as fh:
+        for tier, query, truth, answer in rows:
+            fh.write(json.dumps({"tier": tier, "query": query, "ground_truth": truth, "final_answer": answer,
+                                 "tool_call_count": 1, "action_trace": ["TERMINATE"]}) + "\n")
+
+
+def test_regraded_view(tmp_path: Path) -> None:
+    from atar.demo.curve import has_regraded
+
+    d = make_eval_dir(tmp_path, "a", {"atar": {"overall": metrics(0.25, 4),
+                                               "per_tier": {"tier_2": metrics(0.25, 4)}}}, step=100)
+    _write_answers(d, "atar", [
+        (2, "Find the capital city of Brazil", "Brasilia", "Brasília"),          # accent: gained
+        (2, "What is the boiling point of benzene in Celsius", "80", "80.1°C"),  # ±1 °C: gained
+        (2, "Compute the number of hours in 2 days", "48", "49"),                # exact: still wrong
+        (2, "Find the capital city of Peru", "Lima", "Lima"),                     # already right
+    ])
+    curve = build_learning_curve([d])
+    assert has_regraded(curve)
+    assert curve_rows(curve, "accuracy", "all")[0]["value"] == 0.25                 # original untouched
+    regraded = curve_rows(curve, "accuracy", "all", grader="regraded")[0]
+    assert regraded["value"] == pytest.approx(0.75)
+    assert curve_rows(curve, "accuracy", "tier_2", grader="regraded")[0]["value"] == pytest.approx(0.75)
+    # tool calls don't depend on the grader; efficiency follows the re-graded accuracy
+    assert curve_rows(curve, "avg_tool_calls", "all", grader="regraded")[0]["value"] == 1.0
+    assert curve_rows(curve, "efficiency", "all", grader="regraded")[0]["value"] == pytest.approx(0.75 / 2)
+
+
+def test_no_regraded_view_without_answers(tmp_path: Path) -> None:
+    from atar.demo.curve import has_regraded
+
+    d = make_eval_dir(tmp_path, "a", {"atar": {"overall": metrics(0.3, 2)}}, step=0,
+                      traces={"atar": [(1, ["CALCULATOR"])]})   # old-style file: no answers saved
+    curve = build_learning_curve([d])
+    assert not has_regraded(curve)
+    assert curve_rows(curve, "accuracy", "all", grader="regraded") == []
+    assert curve_rows(curve, "accuracy", "all")[0]["value"] == 0.3

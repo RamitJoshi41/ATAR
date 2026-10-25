@@ -35,8 +35,9 @@ def version_label(version: str) -> str:
     return BASELINE_LABELS.get(version, version)
 
 
-def learning_curve_chart(curve: dict[str, Any], metric: str, tier: str) -> alt.LayerChart | None:
-    rows = curve_rows(curve, metric, tier)
+def learning_curve_chart(curve: dict[str, Any], metric: str, tier: str,
+                         grader: str = "original") -> alt.LayerChart | None:
+    rows = curve_rows(curve, metric, tier, grader)
     if not rows:
         return None
     df = pd.DataFrame(rows)
@@ -66,7 +67,7 @@ def learning_curve_chart(curve: dict[str, Any], metric: str, tier: str) -> alt.L
         ],
     )
     layers: list[alt.Chart] = [band, line, points]
-    base = baseline_rows(curve, metric, tier)
+    base = baseline_rows(curve, metric, tier, grader)
     if base:
         bdf = pd.DataFrame(base)
         bdf["label"] = bdf["baseline"].map(lambda b: BASELINE_LABELS.get(str(b), str(b)))

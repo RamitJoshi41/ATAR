@@ -34,7 +34,7 @@ from atar.demo.charts import (
     learning_curve_chart,
     version_label,
 )
-from atar.demo.curve import METRIC_LABELS
+from atar.demo.curve import METRIC_LABELS, has_regraded
 from atar.demo.metrics import session_metrics
 from atar.demo.replay import EpisodeRecord
 
@@ -150,13 +150,25 @@ def tab_progress(bundle: DemoBundle) -> None:
     c1, c2 = st.columns(2)
     metric = c1.selectbox("Metric", list(METRIC_LABELS), format_func=lambda m: METRIC_LABELS[m])
     tier = c2.selectbox("Tasks", tiers, format_func=lambda t: "All tiers" if t == "all" else t.replace("_", " ").title())
+    grader = "original"
+    if has_regraded(curve):
+        grader = st.radio(
+            "Grader", ["original", "regraded"], horizontal=True,
+            format_func=lambda g: "Original (as trained and evaluated)" if g == "original"
+            else "Re-graded (accents ignored, ±1 °C on boiling points)",
+        )
 
     st.markdown(f"#### {METRIC_LABELS[metric]} on held-out tasks, by training step")
-    chart = learning_curve_chart(curve, metric, tier)
+    chart = learning_curve_chart(curve, metric, tier, grader)
     if chart is not None:
         st.altair_chart(chart, width="stretch")
     st.caption("Each point is one saved checkpoint evaluated on tasks it never trained on; the band is "
                "a 95% bootstrap confidence interval. Dashed lines are the baselines.")
+    if grader == "regraded":
+        st.caption("Re-graded: the same saved answers scored with a corrected grader (ADR-27). The "
+                   "original grader marked some correct answers wrong — \"Brasília\" vs \"Brasilia\", "
+                   "\"78.3 °C\" vs a stored \"78\". It is also what training used, so both views are shown. "
+                   "Tool calls and latency are the same under both.")
 
     st.markdown("#### What each version chooses to do")
     mix = action_mix_chart(curve, tier)
@@ -164,16 +176,15 @@ def tab_progress(bundle: DemoBundle) -> None:
         st.altair_chart(mix, width="stretch")
     with st.expander("Table view"):
         table = []
-        for e in curve["atar"]:
+        versions = [(e["version"], e) for e in curve["atar"]] + sorted(curve.get("baselines", {}).items())
+        for version, e in versions:
             o = e["overall"]
-            table.append({"Version": version_label(e["version"]), "Success": o["accuracy"],
-                          "Avg tool calls": o["avg_tool_calls"], "Efficiency": o["efficiency"],
-                          "Mean latency (s)": o["mean_latency"], "Tasks": o["n_tasks"]})
-        for name, e in sorted(curve.get("baselines", {}).items()):
-            o = e["overall"]
-            table.append({"Version": version_label(name), "Success": o["accuracy"],
-                          "Avg tool calls": o["avg_tool_calls"], "Efficiency": o["efficiency"],
-                          "Mean latency (s)": o["mean_latency"], "Tasks": o["n_tasks"]})
+            row = {"Version": version_label(version), "Success": o["accuracy"]}
+            if "regraded" in e:
+                row["Success (re-graded)"] = e["regraded"]["overall"]["accuracy"]
+            row.update({"Avg tool calls": o["avg_tool_calls"], "Efficiency": o["efficiency"],
+                        "Mean latency (s)": o["mean_latency"], "Tasks": o["n_tasks"]})
+            table.append(row)
         st.dataframe(pd.DataFrame(table), hide_index=True, width="stretch")
 
 

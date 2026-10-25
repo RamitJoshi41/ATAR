@@ -8,10 +8,13 @@ zeroshot, random) may live in any of those directories or in their own.
 
 Output (curve.json in the demo bundle):
 {
-  "atar": [ {"version", "step", "phase", "overall", "per_tier", "action_mix"}, ... ]  # sorted by step
-  "baselines": { "react": {"overall", "per_tier", "action_mix"}, ... }
+  "atar": [ {"version", "step", "phase", "overall", "per_tier", "action_mix", "regraded"}, ... ]  # sorted by step
+  "baselines": { "react": {"overall", "per_tier", "action_mix", "regraded"}, ... }
 }
-Everything here is computed from held-out evaluation, never training reward.
+"regraded" ({"overall", "per_tier"} accuracy + efficiency) is the same saved
+answers scored with the ADR-27 grader; absent if the per-task file can't be
+re-graded.  Everything here is computed from held-out evaluation, never
+training reward.
 """
 
 from __future__ import annotations
@@ -21,6 +24,8 @@ import logging
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
+
+from atar.evaluation.regrading import regraded_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +58,9 @@ def _entry(eval_dir: Path, agent: str, results: dict[str, Any]) -> dict[str, Any
     }
     per_task = eval_dir / f"per_task_{agent}.jsonl"
     entry["action_mix"] = action_mix_by_tier(per_task) if per_task.exists() else {}
+    regraded = regraded_metrics(per_task) if per_task.exists() else None
+    if regraded is not None:
+        entry["regraded"] = regraded
     return entry
 
 
@@ -103,15 +111,31 @@ METRIC_LABELS = {
 }
 
 
-def _metrics_for(entry: dict[str, Any], tier: str) -> dict[str, Any] | None:
-    return entry["overall"] if tier == "all" else entry.get("per_tier", {}).get(tier)
+GRADERS = ("original", "regraded")
 
 
-def curve_rows(curve: dict[str, Any], metric: str = "accuracy", tier: str = "all") -> list[dict[str, Any]]:
+def _metrics_for(entry: dict[str, Any], tier: str, grader: str = "original") -> dict[str, Any] | None:
+    """
+    The entry's metrics for a tier.  With grader="regraded", accuracy (+ CI)
+    and efficiency come from the ADR-27 re-grade; tool calls and latency are
+    the same either way.  None when the requested view isn't available.
+    """
+    m = entry["overall"] if tier == "all" else entry.get("per_tier", {}).get(tier)
+    if m is None or grader == "original":
+        return m
+    regraded = entry.get("regraded")
+    if regraded is None:
+        return None
+    r = regraded["overall"] if tier == "all" else regraded.get("per_tier", {}).get(tier)
+    return None if r is None else {**m, **r}
+
+
+def curve_rows(curve: dict[str, Any], metric: str = "accuracy", tier: str = "all",
+               grader: str = "original") -> list[dict[str, Any]]:
     """One row per ATAR checkpoint: step, value, and the 95% CI when it exists."""
     rows = []
     for entry in curve.get("atar", []):
-        m = _metrics_for(entry, tier)
+        m = _metrics_for(entry, tier, grader)
         if m is None or metric not in m:
             continue
         ci = m.get(f"{metric}_ci")
@@ -123,11 +147,12 @@ def curve_rows(curve: dict[str, Any], metric: str = "accuracy", tier: str = "all
     return rows
 
 
-def baseline_rows(curve: dict[str, Any], metric: str = "accuracy", tier: str = "all") -> list[dict[str, Any]]:
+def baseline_rows(curve: dict[str, Any], metric: str = "accuracy", tier: str = "all",
+                  grader: str = "original") -> list[dict[str, Any]]:
     """One row per baseline: its value for the metric (drawn as a flat reference line)."""
     rows = []
     for name, entry in sorted(curve.get("baselines", {}).items()):
-        m = _metrics_for(entry, tier)
+        m = _metrics_for(entry, tier, grader)
         if m is not None and metric in m:
             rows.append({"baseline": name, "value": m[metric]})
     return rows
@@ -143,3 +168,8 @@ def action_mix_rows(curve: dict[str, Any], tier: str = "all") -> list[dict[str, 
         for action, frac in entry.get("action_mix", {}).get(tier, {}).items():
             rows.append({"version": name, "step": None, "action": action, "fraction": frac})
     return rows
+
+
+def has_regraded(curve: dict[str, Any]) -> bool:
+    """True if every ATAR checkpoint on the curve carries a re-graded view."""
+    return bool(curve.get("atar")) and all("regraded" in e for e in curve["atar"])

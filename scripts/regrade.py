@@ -26,25 +26,8 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from atar.env.answer_matching import is_answer_correct, is_answer_correct_regraded  # noqa: E402
 from atar.evaluation.metrics import bootstrap_ci  # noqa: E402
-
-
-def is_approx_numeric_task(query: str) -> bool:
-    """Boiling-point tasks: their ground truths are rounded constants (generator SUBSTANCES)."""
-    return "boiling point" in query.lower()
-
-
-def regrade_record(record: dict[str, Any]) -> tuple[bool, bool]:
-    """(original verdict, re-graded verdict) for one per_task.jsonl record."""
-    answer = record.get("final_answer")
-    answer_str = None if answer is None else str(answer)
-    truth = str(record["ground_truth"])
-    original = is_answer_correct(answer_str, truth)
-    regraded = is_answer_correct_regraded(
-        answer_str, truth, approx_numeric=is_approx_numeric_task(record["query"])
-    )
-    return original, regraded
+from atar.evaluation.regrading import is_approx_numeric_task, regrade_record  # noqa: E402, F401
 
 
 def load_eval_dir(eval_dir: Path) -> dict[str, list[dict[str, Any]]]:
