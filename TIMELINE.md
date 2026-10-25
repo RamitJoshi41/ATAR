@@ -502,3 +502,22 @@ Template per entry:
   doubled (0.21 → 0.42).
 - Next: evaluate checkpoint_step_24576.pt (+ baselines, step 0) and make
   the 3c extend decision from 18,432 → 24,576.
+
+## 2026-10-25 — Run 2 final held-out evaluation and baselines
+- `checkpoint_step_24576.pt` (= the finished run; no checkpoint_final.pt,
+  see 10-24) and the baselines on the same 200 W5-fixed test tasks
+  (95% bootstrap CI; tier n = 50/38/50/37/25):
+  | agent | accuracy | T1 | T2 | T3 | T4 | T5 | tool calls | latency |
+  |---|---|---|---|---|---|---|---|---|
+  | ATAR 24,576 | 0.820 [0.765, 0.875] | 0.92 | 0.68 | 0.84 | 0.68 | 1.00 | 0.64 | 7.7 s |
+  | ReAct | 0.715 [0.650, 0.775] | 0.90 | 0.45 | 0.68 | 0.62 | 0.96 | 1.91 | 33.1 s |
+  | zero-shot | 0.360 [0.295, 0.425] | 0.56 | 0.50 | 0.32 | 0.03 | 0.32 | 0 | 4.4 s |
+  | random | 0.340 [0.275, 0.405] | 0.46 | 0.39 | 0.30 | 0.16 | 0.36 | 2.08 | 11.3 s |
+- ATAR vs ReAct: +0.105 accuracy (intervals touch at 0.765/0.775 — a paired
+  test on per_task.jsonl is needed before calling it significant), with
+  1/3 of the tool calls and ~1/4 of the latency. Largest gaps on tier 2
+  (distractors: ReAct makes 2.7 tool calls, 0.45 accuracy) and tier 3.
+- Held-out curve: 0.595 (6,144) → 0.66 (12,288) → 0.755 (18,432) → 0.82
+  (24,576). By the 3c rule set on 10-24 (≥ 0.80 → extend), held-out is
+  still rising. Checked: `start_extension` accepts checkpoint_step_24576.pt
+  (step == total_steps), so an extension does not need checkpoint_final.pt.
