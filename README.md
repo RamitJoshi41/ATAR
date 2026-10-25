@@ -490,6 +490,40 @@ byte-identical to before, `tasks_test.jsonl` differs in exactly 10 rows.
 
 ---
 
+## Run 2 results (held-out, 200 tasks, Qwen2.5-7B on Kaggle T4)
+
+Evaluation files: `results/run2/` (downloaded from the Kaggle notebook
+outputs). Two graders on the same saved answers (ADR-27): **original** =
+the grader run 2 was trained and evaluated with; **re-graded** = accents
+ignored and ±1 °C on boiling-point tasks. Full report and every changed
+verdict: `results/run2/regrade.md` (`scripts/regrade.py`).
+
+| agent | original | re-graded | tool calls / task | latency / task |
+|---|---|---|---|---|
+| ATAR, step 6,144 | 0.595 | 0.660 | 0.49 | 6.3 s |
+| ATAR, step 12,288 | 0.660 | 0.715 | 0.73 | 7.9 s |
+| ATAR, step 18,432 | 0.755 | 0.820 | 0.62 | 8.0 s |
+| **ATAR, step 24,576** | **0.820** [0.765, 0.875] | **0.875** [0.825, 0.920] | 0.64 | 7.7 s |
+| ReAct | 0.715 [0.650, 0.775] | 0.725 [0.665, 0.785] | 1.91 | 33.1 s |
+| zero-shot | 0.360 | 0.430 | 0 | 4.4 s |
+| random | 0.340 | 0.380 | 2.08 | 11.3 s |
+
+ATAR vs ReAct, task by task: 31 tasks only ATAR got right vs 10 only ReAct
+(exact McNemar p = 0.0015) with the original grader; 40 vs 10 (p < 0.0001)
+re-graded. Where the gap comes from: tier 2 (distractors — ReAct loops on
+tool calls) and tier 3. Known limits: the task world is small and synthetic
+(3 employees, 10 search sentences); ATAR's remaining errors are mainly
+tier-4 percentage tasks answered without the calculator and tier-3
+"divide by N" answers divided twice by the LLM (ReAct makes the same
+error); W7 ("databases" tasks with a space-exploration ground truth) is
+unfixed.
+
+**What actually happened when run (venv):** `tests/env/test_answer_matching.py`
++ `tests/evaluation` 121 passed (new: re-grading rules, `test_regrade.py`);
+the original grader reproduces all 1,400 stored verdicts.
+
+---
+
 ## M8: Streamlit Demo (`atar/demo/`)
 
 **What:** `streamlit run atar/demo/app.py` (from the repo root, so `.streamlit/config.toml` is

@@ -1,0 +1,7 @@
+{
+  "checkpoint_path": "/kaggle/input/datasets/ramitjoshi/atar-run2-session3/checkpoint_step_18432.pt",
+  "checkpoint_step": 18432,
+  "curriculum_phase": 3,
+  "checkpoint_sha256": "49833aa43a9b3cb99eaadc7cce7194df80985c281d78ee294307587345aaf8c2",
+  "model_name": "Qwen/Qwen2.5-7B-Instruct"
+}

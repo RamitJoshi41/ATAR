@@ -1,0 +1,8 @@
+{
+  "agent": "random",
+  "agent_version": "2026-10-16",
+  "grader": "answer_matching_v2",
+  "model_name": "Qwen/Qwen2.5-7B-Instruct",
+  "seed": 42,
+  "tasks_sha256": "d46fdde58939f9d6d639c735eae62e165f5dfeceb996bf7eafe81f59587c6374"
+}

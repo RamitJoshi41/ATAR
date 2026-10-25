@@ -27,12 +27,20 @@ Long text ground truth (a reference sentence, e.g. a search abstract):
     "Linux" vs a sentence about reinforcement learning -> incorrect.
 
 Empty / None answers are always incorrect.
+
+Re-grading (ADR-27, W6) — reporting only, never the training reward:
+    is_answer_correct_regraded() applies the same rules after removing accent
+    marks from both sides ("Brasília" == "Brasilia"), and with
+    approx_numeric=True accepts numbers within 1.0 of the truth (for ground
+    truths that are rounded physical constants, e.g. boiling points stored as
+    whole degrees: "78.3" vs "78").
 """
 
 from __future__ import annotations
 
 import math
 import re
+import unicodedata
 
 _NUMBER_RE = re.compile(r"-?\d{1,3}(?:,\d{3})+(?:\.\d+)?|-?\d+(?:\.\d+)?")
 _FULL_NUMBER_RE = re.compile(r"^\s*-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*$")
@@ -48,6 +56,8 @@ _STOPWORDS: frozenset[str] = frozenset(
 
 _SHORT_TRUTH_MAX_WORDS = 3
 _LONG_TRUTH_RECALL = 0.6
+_NUMERIC_ABS_TOL = 0.005
+_APPROX_NUMERIC_ABS_TOL = 1.0
 
 
 def _parse_number(text: str) -> float:
@@ -72,6 +82,11 @@ def is_numeric_truth(ground_truth: str) -> bool:
     return bool(_FULL_NUMBER_RE.match(ground_truth))
 
 
+def fold_accents(text: str) -> str:
+    """Remove accent marks: "Bogotá" -> "Bogota" (NFD, combining marks dropped)."""
+    return "".join(c for c in unicodedata.normalize("NFD", text) if not unicodedata.combining(c))
+
+
 def is_answer_correct(answer: str | None, ground_truth: str) -> bool:
     """
     Decide whether ``answer`` matches ``ground_truth``.  See module docstring
@@ -79,6 +94,24 @@ def is_answer_correct(answer: str | None, ground_truth: str) -> bool:
     """
     if answer is None:
         return False
+    return _matches(answer, ground_truth, _NUMERIC_ABS_TOL)
+
+
+def is_answer_correct_regraded(
+    answer: str | None, ground_truth: str, *, approx_numeric: bool = False
+) -> bool:
+    """
+    Re-grading rules for reporting run 2 (ADR-27): is_answer_correct plus
+    accent folding and, with ``approx_numeric``, a ±1.0 numeric tolerance.
+    Not used by ATAREnv — run 2's reward stays is_answer_correct.
+    """
+    if answer is None:
+        return False
+    abs_tol = _APPROX_NUMERIC_ABS_TOL if approx_numeric else _NUMERIC_ABS_TOL
+    return _matches(fold_accents(answer), fold_accents(ground_truth), abs_tol)
+
+
+def _matches(answer: str, ground_truth: str, abs_tol: float) -> bool:
     answer = answer.strip()
     truth = ground_truth.strip()
     if not answer or not truth:
@@ -93,7 +126,7 @@ def is_answer_correct(answer: str | None, ground_truth: str) -> bool:
             t_val = _parse_number(truth)
         except ValueError:
             return False
-        return math.isclose(a_val, t_val, rel_tol=1e-6, abs_tol=0.005)
+        return math.isclose(a_val, t_val, rel_tol=1e-6, abs_tol=abs_tol)
 
     truth_words = _content_words(truth)
     answer_words = _content_words(answer)

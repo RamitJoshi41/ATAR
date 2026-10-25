@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from atar.env.answer_matching import is_answer_correct, is_numeric_truth
+from atar.env.answer_matching import is_answer_correct, is_answer_correct_regraded, is_numeric_truth
 
 RL_TRUTH = (
     "Reinforcement learning is an area of machine learning concerned with how "
@@ -132,3 +132,51 @@ def test_is_numeric_truth() -> None:
     assert is_numeric_truth("-3")
     assert not is_numeric_truth("Washington D.C.")
     assert not is_numeric_truth("Route 66")
+
+
+# ─── re-grading rules (ADR-27, W6) — reporting only ─────────────────────
+
+@pytest.mark.parametrize(
+    "answer, truth",
+    [
+        ("Brasília", "Brasilia"),
+        ("The capital city of Brazil is Brasília.", "Brasilia"),
+        ("Bogotá", "Bogota"),
+    ],
+)
+def test_regraded_ignores_accents(answer: str, truth: str) -> None:
+    assert is_answer_correct(answer, truth) is False  # the training grader stays strict
+    assert is_answer_correct_regraded(answer, truth) is True
+
+
+@pytest.mark.parametrize(
+    "answer, truth",
+    [("78.3°C", "78"), ("356.73°C", "356"), ("357.0", "356"), ("64.7°C", "65"), ("118.1 °C", "118")],
+)
+def test_regraded_approx_numeric_within_one(answer: str, truth: str) -> None:
+    assert is_answer_correct(answer, truth) is False
+    assert is_answer_correct_regraded(answer, truth) is False  # tolerance only when asked for
+    assert is_answer_correct_regraded(answer, truth, approx_numeric=True) is True
+
+
+@pytest.mark.parametrize(
+    "answer, truth",
+    [
+        ("-64.7°C", "65"),                                  # wrong sign
+        ("approximately 337.4°C (639.32°F)", "337"),        # last number is Fahrenheit
+        ("358.5", "356"),                                   # more than 1 away
+    ],
+)
+def test_regraded_approx_numeric_still_rejects(answer: str, truth: str) -> None:
+    assert is_answer_correct_regraded(answer, truth, approx_numeric=True) is False
+
+
+def test_regraded_exact_numeric_has_no_extra_tolerance() -> None:
+    # "hours in 1589 days" is exact arithmetic: off by one stays wrong
+    assert is_answer_correct_regraded("38137", "38136") is False
+    assert is_answer_correct_regraded("38136.0", "38136") is True
+
+
+def test_regraded_none_and_empty() -> None:
+    assert is_answer_correct_regraded(None, "Paris") is False
+    assert is_answer_correct_regraded("", "Paris") is False

@@ -1,0 +1,464 @@
+{
+  "zeroshot": {
+    "overall": {
+      "n_tasks": 200,
+      "accuracy": 0.36,
+      "accuracy_ci": [
+        0.295,
+        0.42512499999999814
+      ],
+      "success_rate": 0.36,
+      "success_rate_ci": [
+        0.295,
+        0.42512499999999814
+      ],
+      "avg_tool_calls": 0.0,
+      "avg_tool_calls_ci": [
+        0.0,
+        0.0
+      ],
+      "efficiency": 0.36,
+      "recovery_rate": 0.0,
+      "mean_latency": 4.379618,
+      "mean_latency_ci": [
+        4.151271299999999,
+        4.622796237499999
+      ]
+    },
+    "per_tier": {
+      "tier_1": {
+        "n_tasks": 50,
+        "accuracy": 0.56,
+        "accuracy_ci": [
+          0.42,
+          0.7
+        ],
+        "success_rate": 0.56,
+        "success_rate_ci": [
+          0.42,
+          0.7
+        ],
+        "avg_tool_calls": 0.0,
+        "avg_tool_calls_ci": [
+          0.0,
+          0.0
+        ],
+        "efficiency": 0.56,
+        "recovery_rate": 0.0,
+        "mean_latency": 5.301888,
+        "mean_latency_ci": [
+          4.58930035,
+          6.04289745
+        ]
+      },
+      "tier_2": {
+        "n_tasks": 38,
+        "accuracy": 0.5,
+        "accuracy_ci": [
+          0.34210526315789475,
+          0.6578947368421053
+        ],
+        "success_rate": 0.5,
+        "success_rate_ci": [
+          0.34210526315789475,
+          0.6578947368421053
+        ],
+        "avg_tool_calls": 0.0,
+        "avg_tool_calls_ci": [
+          0.0,
+          0.0
+        ],
+        "efficiency": 0.5,
+        "recovery_rate": 0.0,
+        "mean_latency": 3.299371052631579,
+        "mean_latency_ci": [
+          3.1101582236842105,
+          3.50773947368421
+        ]
+      },
+      "tier_3": {
+        "n_tasks": 50,
+        "accuracy": 0.32,
+        "accuracy_ci": [
+          0.2,
+          0.46
+        ],
+        "success_rate": 0.32,
+        "success_rate_ci": [
+          0.2,
+          0.46
+        ],
+        "avg_tool_calls": 0.0,
+        "avg_tool_calls_ci": [
+          0.0,
+          0.0
+        ],
+        "efficiency": 0.32,
+        "recovery_rate": 0.0,
+        "mean_latency": 4.516852,
+        "mean_latency_ci": [
+          4.295969,
+          4.7952240999999995
+        ]
+      },
+      "tier_4": {
+        "n_tasks": 37,
+        "accuracy": 0.02702702702702703,
+        "accuracy_ci": [
+          0.0,
+          0.08108108108108109
+        ],
+        "success_rate": 0.02702702702702703,
+        "success_rate_ci": [
+          0.0,
+          0.08108108108108109
+        ],
+        "avg_tool_calls": 0.0,
+        "avg_tool_calls_ci": [
+          0.0,
+          0.0
+        ],
+        "efficiency": 0.02702702702702703,
+        "recovery_rate": 0.0,
+        "mean_latency": 3.8772675675675674,
+        "mean_latency_ci": [
+          3.6986210810810816,
+          4.051565608108109
+        ]
+      },
+      "tier_5": {
+        "n_tasks": 25,
+        "accuracy": 0.32,
+        "accuracy_ci": [
+          0.16,
+          0.52
+        ],
+        "success_rate": 0.32,
+        "success_rate_ci": [
+          0.16,
+          0.52
+        ],
+        "avg_tool_calls": 0.0,
+        "avg_tool_calls_ci": [
+          0.0,
+          0.0
+        ],
+        "efficiency": 0.32,
+        "recovery_rate": 0.0,
+        "mean_latency": 4.646064,
+        "mean_latency_ci": [
+          4.1279153,
+          5.2255365000000005
+        ]
+      }
+    }
+  },
+  "react": {
+    "overall": {
+      "n_tasks": 200,
+      "accuracy": 0.715,
+      "accuracy_ci": [
+        0.65,
+        0.775
+      ],
+      "success_rate": 0.715,
+      "success_rate_ci": [
+        0.65,
+        0.775
+      ],
+      "avg_tool_calls": 1.905,
+      "avg_tool_calls_ci": [
+        1.705,
+        2.105
+      ],
+      "efficiency": 0.2461273666092943,
+      "recovery_rate": 0.3333333333333333,
+      "mean_latency": 33.058852,
+      "mean_latency_ci": [
+        31.1346255375,
+        34.990266075
+      ]
+    },
+    "per_tier": {
+      "tier_1": {
+        "n_tasks": 50,
+        "accuracy": 0.9,
+        "accuracy_ci": [
+          0.8,
+          0.98
+        ],
+        "success_rate": 0.9,
+        "success_rate_ci": [
+          0.8,
+          0.98
+        ],
+        "avg_tool_calls": 1.2,
+        "avg_tool_calls_ci": [
+          0.92,
+          1.54
+        ],
+        "efficiency": 0.40909090909090906,
+        "recovery_rate": 0.0,
+        "mean_latency": 24.550030000000003,
+        "mean_latency_ci": [
+          22.025632799999993,
+          27.3573273
+        ]
+      },
+      "tier_2": {
+        "n_tasks": 38,
+        "accuracy": 0.4473684210526316,
+        "accuracy_ci": [
+          0.2894736842105263,
+          0.6052631578947368
+        ],
+        "success_rate": 0.4473684210526316,
+        "success_rate_ci": [
+          0.2894736842105263,
+          0.6052631578947368
+        ],
+        "avg_tool_calls": 2.6842105263157894,
+        "avg_tool_calls_ci": [
+          1.9736842105263157,
+          3.3684210526315788
+        ],
+        "efficiency": 0.12142857142857143,
+        "recovery_rate": 0.0,
+        "mean_latency": 37.33917631578947,
+        "mean_latency_ci": [
+          31.05901565789473,
+          43.46845986842106
+        ]
+      },
+      "tier_3": {
+        "n_tasks": 50,
+        "accuracy": 0.68,
+        "accuracy_ci": [
+          0.54,
+          0.8
+        ],
+        "success_rate": 0.68,
+        "success_rate_ci": [
+          0.54,
+          0.8
+        ],
+        "avg_tool_calls": 2.02,
+        "avg_tool_calls_ci": [
+          1.76,
+          2.32
+        ],
+        "efficiency": 0.2251655629139073,
+        "recovery_rate": 0.0,
+        "mean_latency": 37.049665999999995,
+        "mean_latency_ci": [
+          34.0482717,
+          40.31689365
+        ]
+      },
+      "tier_4": {
+        "n_tasks": 37,
+        "accuracy": 0.6216216216216216,
+        "accuracy_ci": [
+          0.4594594594594595,
+          0.7837837837837838
+        ],
+        "success_rate": 0.6216216216216216,
+        "success_rate_ci": [
+          0.4594594594594595,
+          0.7837837837837838
+        ],
+        "avg_tool_calls": 2.135135135135135,
+        "avg_tool_calls_ci": [
+          1.7837837837837838,
+          2.5135135135135136
+        ],
+        "efficiency": 0.19827586206896552,
+        "recovery_rate": 0.0,
+        "mean_latency": 35.78782702702703,
+        "mean_latency_ci": [
+          32.07427587837838,
+          39.82931763513514
+        ]
+      },
+      "tier_5": {
+        "n_tasks": 25,
+        "accuracy": 0.96,
+        "accuracy_ci": [
+          0.88,
+          1.0
+        ],
+        "success_rate": 0.96,
+        "success_rate_ci": [
+          0.88,
+          1.0
+        ],
+        "avg_tool_calls": 1.56,
+        "avg_tool_calls_ci": [
+          1.2,
+          1.96
+        ],
+        "efficiency": 0.375,
+        "recovery_rate": 1.0,
+        "mean_latency": 31.549892,
+        "mean_latency_ci": [
+          27.6668311,
+          35.90493539999999
+        ]
+      }
+    }
+  },
+  "random": {
+    "overall": {
+      "n_tasks": 200,
+      "accuracy": 0.34,
+      "accuracy_ci": [
+        0.275,
+        0.405
+      ],
+      "success_rate": 0.34,
+      "success_rate_ci": [
+        0.275,
+        0.405
+      ],
+      "avg_tool_calls": 2.08,
+      "avg_tool_calls_ci": [
+        1.83,
+        2.335
+      ],
+      "efficiency": 0.1103896103896104,
+      "recovery_rate": 0.23333333333333334,
+      "mean_latency": 11.345897,
+      "mean_latency_ci": [
+        10.515615887500001,
+        12.187110875
+      ]
+    },
+    "per_tier": {
+      "tier_1": {
+        "n_tasks": 50,
+        "accuracy": 0.46,
+        "accuracy_ci": [
+          0.32,
+          0.6
+        ],
+        "success_rate": 0.46,
+        "success_rate_ci": [
+          0.32,
+          0.6
+        ],
+        "avg_tool_calls": 2.46,
+        "avg_tool_calls_ci": [
+          1.94,
+          2.98
+        ],
+        "efficiency": 0.13294797687861273,
+        "recovery_rate": 0.15789473684210525,
+        "mean_latency": 13.391052,
+        "mean_latency_ci": [
+          11.6713946,
+          15.219061950000002
+        ]
+      },
+      "tier_2": {
+        "n_tasks": 38,
+        "accuracy": 0.39473684210526316,
+        "accuracy_ci": [
+          0.23684210526315788,
+          0.5526315789473685
+        ],
+        "success_rate": 0.39473684210526316,
+        "success_rate_ci": [
+          0.23684210526315788,
+          0.5526315789473685
+        ],
+        "avg_tool_calls": 2.4210526315789473,
+        "avg_tool_calls_ci": [
+          1.8151315789473743,
+          3.0789473684210527
+        ],
+        "efficiency": 0.11538461538461539,
+        "recovery_rate": 0.2222222222222222,
+        "mean_latency": 10.595734210526317,
+        "mean_latency_ci": [
+          8.978692894736842,
+          12.290836249999998
+        ]
+      },
+      "tier_3": {
+        "n_tasks": 50,
+        "accuracy": 0.3,
+        "accuracy_ci": [
+          0.18,
+          0.44
+        ],
+        "success_rate": 0.3,
+        "success_rate_ci": [
+          0.18,
+          0.44
+        ],
+        "avg_tool_calls": 1.74,
+        "avg_tool_calls_ci": [
+          1.26,
+          2.24
+        ],
+        "efficiency": 0.1094890510948905,
+        "recovery_rate": 0.375,
+        "mean_latency": 11.085057999999998,
+        "mean_latency_ci": [
+          9.4498927,
+          12.833934399999999
+        ]
+      },
+      "tier_4": {
+        "n_tasks": 37,
+        "accuracy": 0.16216216216216217,
+        "accuracy_ci": [
+          0.05405405405405406,
+          0.2972972972972973
+        ],
+        "success_rate": 0.16216216216216217,
+        "success_rate_ci": [
+          0.05405405405405406,
+          0.2972972972972973
+        ],
+        "avg_tool_calls": 1.6756756756756757,
+        "avg_tool_calls_ci": [
+          1.162162162162162,
+          2.2432432432432434
+        ],
+        "efficiency": 0.060606060606060615,
+        "recovery_rate": 0.125,
+        "mean_latency": 9.086445945945947,
+        "mean_latency_ci": [
+          7.693974864864866,
+          10.562813243243246
+        ]
+      },
+      "tier_5": {
+        "n_tasks": 25,
+        "accuracy": 0.36,
+        "accuracy_ci": [
+          0.2,
+          0.56
+        ],
+        "success_rate": 0.36,
+        "success_rate_ci": [
+          0.2,
+          0.56
+        ],
+        "avg_tool_calls": 2.08,
+        "avg_tool_calls_ci": [
+          1.4,
+          2.8
+        ],
+        "efficiency": 0.11688311688311688,
+        "recovery_rate": 0.25,
+        "mean_latency": 12.261500000000002,
+        "mean_latency_ci": [
+          9.6561006,
+          15.1846413
+        ]
+      }
+    }
+  }
+}

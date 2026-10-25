@@ -641,3 +641,39 @@ files byte for byte; capital tasks expect "Paris" in test and the old
 sentence in train; the real test set rejects "France"/"Europe"/"capital"
 and accepts "Paris". Evaluation fingerprints include the test set's
 SHA-256, so no older result can be resumed into a new evaluation.
+
+## ADR-27: Report run 2 under both the original and a corrected grader (W6)
+**Date:** 2026-10-25
+**Decision:** Keep `is_answer_correct` unchanged (run 2's training reward
+and the grader every stored verdict came from) and add
+`is_answer_correct_regraded` for reporting only: accent marks removed from
+both sides before comparing, and — for tasks whose question asks for a
+boiling point — numbers within ±1.0 of the ground truth accepted.
+`scripts/regrade.py` re-scores the saved `per_task.jsonl` files with both,
+refuses to run if the original grader does not reproduce every stored
+verdict, and writes `results/run2/regrade.md`.
+**Context:** In the final evaluation, 11 of ATAR's 12 tier-2 failures were
+correct answers marked wrong: "Brasília"/"Bogotá" vs "Brasilia"/"Bogota"
+(the word tokenizer splits on non-ASCII letters), and boiling points whose
+ground truths are whole degrees in `SUBSTANCES` ("78" for ethanol, 78.37 °C)
+checked with a 0.005 tolerance. The same grader is the training reward
+(ADR-16), so it cannot be changed for run 2 without changing what run 2 was
+trained on.
+**Alternatives considered:**
+- Fix the grader in place — rejected: the stored results and the training
+  reward would no longer match the code, and the original numbers could
+  not be reproduced.
+- Change the ground truths to precise values (78.37) — rejected for now:
+  still needs a tolerance, and would change the training data.
+- A general relative tolerance on all numbers — rejected: arithmetic tasks
+  ("hours in 1589 days", "salary ÷ 4") have one exact answer; an
+  off-by-one there is a real error.
+**Consequence:** The rules were written after inspecting ATAR's failures,
+so they are deliberately narrow and applied identically to all agents and
+checkpoints, before computing who gains. Every change is on tier 2 and is a
+gain (0 lost verdicts): ATAR 24,576 0.820 → 0.875, ReAct 0.715 → 0.725,
+zero-shot 0.360 → 0.430, random 0.340 → 0.380; ATAR vs ReAct paired
+40 vs 10 (p < 0.0001) re-graded, 31 vs 10 (p = 0.0015) original. One
+side effect: ±1 accepts the random agent's "55.4" for acetone (56.05 °C).
+For a run 3, fix the reward itself (accent folding in the tokenizer;
+boiling-point ground truths with their own tolerance).

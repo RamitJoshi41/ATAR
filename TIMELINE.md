@@ -549,3 +549,18 @@ Template per entry:
   here; re-grade all agents offline with a fixed grader for the report;
   fix W1/W5/W6/W7 before any further training (a run 3 costs about the
   same GPU time as the 24k-step extension).
+
+## 2026-10-25 — Results downloaded with the Kaggle CLI; re-graded (ADR-27)
+- Kaggle CLI 2.2.5 via `uvx --python 3.12 kaggle` (reads
+  ~/.kaggle/access_token; the 1.7.x that installs on the venv's Python 3.10
+  only reads kaggle.json, so it was uninstalled again). Training-v3 version
+  8 = session 4 (eval_step6144/12288/18432 + 24-line metrics.jsonl); latest
+  version = eval_step24576 + eval_baselines. All in `results/run2/`;
+  accuracies match the comparison.md files sent earlier.
+- User approved the two re-grading rules before they were applied (accents
+  ignored; ±1 °C only on boiling-point tasks). Original grader reproduced
+  all 1,400 stored verdicts. Re-graded: ATAR 6,144/12,288/18,432/24,576 =
+  0.660/0.715/0.820/0.875 (was 0.595/0.660/0.755/0.820); ReAct 0.725
+  (0.715); zero-shot 0.430 (0.360); random 0.380 (0.340). All changes tier
+  2, none lost. Paired ATAR vs ReAct re-graded: 40 vs 10, p < 0.0001.
+- Tests: test_answer_matching + tests/evaluation 121 passed; full tests/env 78 passed.

@@ -1,0 +1,9 @@
+{
+  "agent": "atar",
+  "agent_version": "2026-10-16",
+  "checkpoint_sha256": "af8cb48d49c0fcfdfccedf0f5099692c8a25366e17060f8b16c13dc8019ee6b1",
+  "grader": "answer_matching_v2",
+  "model_name": "Qwen/Qwen2.5-7B-Instruct",
+  "seed": 42,
+  "tasks_sha256": "d46fdde58939f9d6d639c735eae62e165f5dfeceb996bf7eafe81f59587c6374"
+}
